@@ -18,9 +18,10 @@ python scripts/priority.py
 ```
 
 Why bash: Windows PowerShell 5.1 strips the inner double quotes from arguments it passes to
-python, so a value such as `'["[[a]]", "[[b]]"]'` is written to the note as `[[[a]], [[b]]]`
-without any error. If you must use PowerShell, escape each inner quote as `\"`, for example
-`'[\"[[a]]\", \"[[b]]\"]'`, and check the result with `note.py show`.
+python, so a value such as `'["[[a]]", "[[b]]"]'` arrives as `[[[a]], [[b]]]`. `note.py` refuses
+that for `depends_on` and `part_of`, but other keys are written as they arrive. If you must use
+PowerShell, escape each inner quote as `\"`, for example `'[\"[[a]]\", \"[[b]]\"]'`, and check
+the result with `note.py show`.
 
 ## Ground rules
 - Work only from <owner>'s files and from what <owner> tells you. Do not make facts up. When you

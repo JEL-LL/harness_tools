@@ -115,6 +115,63 @@ def note_corners(h, tmp):
              has=("logged ->",))
     h.expect("multi-line text is indented under its bullet", "note", "show", "dana", has=(
         "## Log\n- 2026-11-09: took the minutes\n- 2026-11-10: sent the minutes round\n  with the budget\n",))
+    link_values(h)
+
+
+def link_values(h):
+    """depends_on / part_of values that priority.py or links.py would misread are refused, file untouched."""
+    note = ("concordance", "projects", "tool-shed-roof.md")
+    before = h.read(*note)
+    dep_err, part_err = "depends_on must be a list of [[slug]] links", "part_of must be one [[slug]] link"
+    refused = [  # (what, key, value, must have, must lack)
+        ("depends_on with stripped quotes (PowerShell 5.1)", "depends_on", "[[[roof-permit]]]",
+         (dep_err, "PowerShell 5.1", '\'[\\"[[other-note]]\\"]\''), ()),
+        ("depends_on as a plain string", "depends_on", '"[[roof-permit]]"', (dep_err,), ("PowerShell",)),
+        ("depends_on with a mapping item", "depends_on", "[{a: 1}]", (dep_err,), ()),
+        ("depends_on with a bare slug", "depends_on", "[roof-permit]", (dep_err,), ()),
+        ("depends_on with spaces inside the brackets", "depends_on", '["[[ roof-permit ]]"]', (dep_err,), ()),
+        ("depends_on with a label", "depends_on", '["[[roof-permit|the permit]]"]', (dep_err,), ()),
+        ("empty depends_on", "depends_on", "~", ("note.py unset tool-shed-roof depends_on",), ()),
+        ("part_of as a list", "part_of", '["[[garden-season]]"]', (part_err,), ("PowerShell",)),
+        ("part_of as a bare slug", "part_of", "garden-season", (part_err,), ()),
+        ("part_of with stripped quotes (PowerShell 5.1)", "part_of", "[[garden-season]]",
+         (part_err, "PowerShell 5.1", '\'\\"[[parent-note]]\\"\''), ()),
+    ]
+    for what, key, value, has, lacks in refused:
+        h.expect(f"set {what} is refused", "note", "set", "tool-shed-roof", key, value, code=1, where="stderr",
+                 has=has, lacks=lacks + ("warning",))
+    check("refused sets leave the note byte-identical", h.read(*note) == before)
+    h.expect("refused set on a missing note names the note, no link warning", "note", "set", "no-such", "depends_on",
+             '["[[nope]]"]', code=1, where="stderr", has=("no note 'no-such'",), lacks=("warning",))
+
+    p = h.expect("set depends_on in single-quoted YAML is accepted", "note", "set", "tool-shed-roof", "depends_on",
+                 "[' [[roof-permit]] ']", has=("set depends_on",))
+    check("  ... with no warning", p.stderr == "", p.stderr)
+    h.expect("set depends_on to an empty list is accepted", "note", "set", "tool-shed-roof", "depends_on", "[]",
+             has=("set depends_on",))
+    p = h.expect("set depends_on naming no note warns", "note", "set", "tool-shed-roof", "depends_on",
+                 '["[[roof-permit]]", "[[no-such-note]]", "[[no-such-note]]"]', where="stderr",
+                 has=("[[no-such-note]], which has no note yet",))
+    check("  ... once per slug", p.stderr.count("no-such-note") == 1, p.stderr)
+    check("  ... and writes it", 'depends_on: ["[[roof-permit]]", "[[no-such-note]]", "[[no-such-note]]"]'
+          in h.read(*note))
+    h.expect("set depends_on with the wrong case warns", "note", "set", "tool-shed-roof", "depends_on",
+             '["[[Roof-Permit]]"]', where="stderr", has=("[[Roof-Permit]], which differs in case from [[roof-permit]]",))
+    h.expect("set part_of naming no note warns", "note", "set", "tool-shed-roof", "part_of", '"[[no-such-parent]]"',
+             where="stderr", has=("part_of names [[no-such-parent]], which has no note yet",))
+    p = h.expect("set part_of back", "note", "set", "tool-shed-roof", "part_of", '"[[garden-season]]"',
+                 has=("set part_of",))
+    check("  ... with no warning", p.stderr == "", p.stderr)
+    h.expect("set depends_on back", "note", "set", "tool-shed-roof", "depends_on", '["[[roof-permit]]"]',
+             has=("set depends_on",))
+    check("note is back to how it was", h.read(*note) == before)
+
+    h.expect("new --part-of with two words is refused", "note", "new", "projects", "odd-part", "Odd", "Odd one.",
+             "--part-of", "two words", code=1, where="stderr", has=("--part-of must be a slug",))
+    check("  ... and creates no file", not os.path.exists(h.path("concordance", "projects", "odd-part.md")))
+    h.expect("new --part-of with the wrong case warns", "note", "new", "projects", "odd-part", "Odd", "Odd one.",
+             "--part-of", "[[Garden-Season]]", where="stderr", has=("differs in case from [[garden-season]]",))
+    os.remove(h.path("concordance", "projects", "odd-part.md"))
 
 
 def count_log_entries(h):

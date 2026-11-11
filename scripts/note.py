@@ -8,7 +8,8 @@ Usage:
               [--mentions REGEX ...] [--aliases A ...] [--part-of SLUG]
   note.py log SLUG "YYYY-MM-DD: text"      dated bullet into ## Log, in date order
   note.py question SLUG "text"             bullet appended to ## Open questions
-  note.py set SLUG KEY VALUE               front-matter field; VALUE is YAML ([a, b], 3, 2026-10-09)
+  note.py set SLUG KEY VALUE               front-matter field; VALUE is YAML ([a, b], 3, 2026-10-09);
+                                           depends_on must be a list of [[slug]] links, part_of one link
   note.py unset SLUG KEY
   note.py show SLUG
 
@@ -195,8 +196,11 @@ def cmd_new(root, a):
                 die(f"bad --mentions regex {m!r}: {e}")
         meta["mentions"] = a.mentions
     if a.part_of:
-        p = a.part_of.strip("[]")
+        p = a.part_of.strip().strip("[]").strip()
+        if not link_target(f"[[{p}]]"):
+            die(f"--part-of must be a slug such as parent-note (brackets optional); got {a.part_of!r}")
         meta["part_of"] = f"[[{p}]]"
+        warn_missing(root, "part_of", [p])
     fm = []
     for k, v in meta.items():
         if k == "part_of":
@@ -348,6 +352,55 @@ def write_meta(note, key, value, remove):
     return True
 
 
+# depends_on and part_of are read by priority.py and links.py through the [[slug]] text, so
+# note.py accepts only that form: "[[slug]]" (outer spaces allowed, none inside the brackets).
+# Stricter than the readers on purpose: no bare slugs, [[slug|label]] or [[slug#part]].
+LINK_ITEM = re.compile(r"^\s*\[\[([^\[\]|#\s]+)\]\]\s*$")
+LINK_FORM = {"depends_on": ("a list of [[slug]] links", "'[\"[[other-note]]\"]'"),
+             "part_of": ("one [[slug]] link", "'\"[[parent-note]]\"'")}
+PS_HINT = (" (the inner double quotes look stripped: Windows PowerShell 5.1 does that when it passes"
+           " arguments to python; use bash or cmd, or in PowerShell escape them as \\\", e.g. {eg})")
+
+
+def link_target(item):
+    """The slug a depends_on / part_of item names, or None when it is not a well-formed [[slug]]."""
+    m = LINK_ITEM.match(item) if isinstance(item, str) else None
+    return m.group(1) if m else None
+
+
+def link_problem(key, value, raw, slug="SLUG"):
+    """Why a depends_on / part_of value would be misread by priority.py or links.py, or None.
+
+    A nested list or a plain string for depends_on used to be written silently; priority.py then
+    took the dependency for a missing note and stopped blocking. Windows PowerShell 5.1 produces
+    exactly that by stripping the inner double quotes of '["[[slug]]"]' on its way to python."""
+    if key not in LINK_FORM:
+        return None
+    shape, eg = LINK_FORM[key]
+    if value is None:
+        return f"{key} is empty; to remove it use `note.py unset {slug} {key}`"
+    items = value if key == "depends_on" else [value]
+    if isinstance(items, list) and all(link_target(i) for i in items):
+        return None
+    stripped = isinstance(value, list) and any(isinstance(i, list) for i in value) and \
+        not any(q in raw for q in "\"'")
+    return f"{key} must be {shape}, e.g. {eg}; got {raw.strip()!r}, which reads as {value!r}" + \
+        (PS_HINT.format(eg=eg.replace('"', '\\"')) if stripped else "")
+
+
+def warn_missing(root, key, slugs):
+    """Warn (do not fail) about link targets with no note: priority.py allows those on purpose.
+    Exact case, because priority.py and links.py compare slugs case-sensitively."""
+    names = {os.path.splitext(os.path.basename(p))[0] for p in note_paths(root)}
+    lower = {n.lower(): n for n in names}
+    for s in dict.fromkeys(slugs):  # each slug once, in order
+        if s in names:
+            continue
+        near = lower.get(s.lower())
+        why = f"differs in case from [[{near}]]" if near else "has no note yet"
+        print(f"note.py: warning: {key} names [[{s}]], which {why}", file=sys.stderr)
+
+
 def cmd_set(root, a):
     if not re.match(r"^[A-Za-z_][\w-]*$", a.key):
         die(f"bad key '{a.key}'")
@@ -356,6 +409,11 @@ def cmd_set(root, a):
     except yaml.YAMLError as e:
         die(f"VALUE is not valid YAML: {e}")
     note = Note(find(root, a.slug))
+    problem = link_problem(a.key, value, a.value, a.slug)
+    if problem:
+        die(problem)
+    if a.key in LINK_FORM:
+        warn_missing(root, a.key, [link_target(i) for i in (value if a.key == "depends_on" else [value])])
     # keep the user's own spelling when it is one line and means the same thing
     try:
         if "\n" not in a.value and a.value.strip() and \

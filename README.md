@@ -327,8 +327,10 @@ the harness. Other agents can read the same files as plain instructions.
 
 The commands in the templates are bash (Git Bash on Windows). Windows PowerShell 5.1 drops the
 inner double quotes from arguments it passes to python, so `note.py set` values such as
-`'["[[a]]", "[[b]]"]'` would be stored wrongly; CLAUDE.md shows the escaped form for the rare
-case where PowerShell is the only option.
+`'["[[a]]", "[[b]]"]'` arrive mangled. For `depends_on` and `part_of`, `note.py` refuses a value
+that is not in the `[[slug]]` form (and says so when the quotes look stripped), and warns when a
+named slug has no note yet; other keys are stored as they arrive. CLAUDE.md shows the escaped
+form for the rare case where PowerShell is the only option.
 
 A daily routine:
 
