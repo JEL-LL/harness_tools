@@ -15,7 +15,7 @@ Usage:
 KIND is a concordance folder (the `kinds` setting in harness.yaml; default projects hardware
 machines people concepts places orgs) or its singular type name. Multi-line log/question text:
 later lines are indented 2 spaces.
-Tests point the script elsewhere with --root DIR or env HARNESS_CONCORDANCE.
+Point the script elsewhere with --root DIR or env HARNESS_CONCORDANCE.
 """
 import argparse, glob, os, re, sys, tempfile
 

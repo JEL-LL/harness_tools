@@ -168,10 +168,14 @@ def cmd_orphans(a):
 
 
 def _note_states():
-    """slug -> (state, done_on) from each concordance note's front matter."""
+    """slug -> (state, done_on) from each concordance note's front matter. Same files as
+    priority.note_paths(): any depth, skipping generated names (uppercase or '_' first, e.g. INDEX.md)."""
     import glob, yaml
     out = {}
-    for path in glob.glob(os.path.join(config.CONCORDANCE, "*", "*.md")):
+    for path in glob.glob(os.path.join(config.CONCORDANCE, "**", "*.md"), recursive=True):
+        name = os.path.basename(path)
+        if name[0].isupper() or name.startswith("_"):
+            continue
         with open(path, encoding="utf-8") as f:
             m = re.match(r"---\r?\n(.*?)\r?\n---", f.read(), re.S)
         fm = (yaml.safe_load(m.group(1)) if m else None) or {}

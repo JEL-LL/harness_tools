@@ -1,0 +1,31 @@
+# A made-up harness (a community garden, Sep-Nov 2026). It demonstrates:
+#   every state (active, waiting, parked, blocked, proposed, dormant, done, dead); base, age_rate,
+#   last_touched, mentions, nudge_every with waiting_on, depends_on with a done dependency (unblock
+#   bump), pressure lifting a low-base blocker, knobs with until "[[slug]] done", until a date and
+#   half_life; part_of, aliases, "## Open questions" and dated "## Log" bullets; a thought log with
+#   a Saturday stamp, a repeated date and an inline todo; a todo file with a split marker and "|"
+#   progress lines; a scan pass; pins (pinned, and done-elsewhere).
+# tests/smoke_test.py covers the rest on a copy: review.repos, path overrides (HARNESS_CONFIG,
+# note.py --root), aging.count_log_entries, and bad settings.
+# Run the scripts on it with
+#   HARNESS_ROOT=example python scripts/priority.py --all
+# (or copy it somewhere first: commands such as note.py, mark and pin write into it).
+owner: the garden committee
+
+kinds:
+  projects: project
+  people: person
+  places: place
+  orgs: org
+  concepts: concept
+
+thought_log:
+  path: thinking.txt
+  date_line: '^(\d{2})/(\d{2})/(\d{4})\s*$'
+  date_order: mdy
+  inline_todo_marker: "----- inline todo -----"
+  suspect_weekdays: [5]      # never writes on Saturdays, so 10/17/2026 gets flagged
+
+todo:
+  path: todo.txt
+  split_marker: "----- done above, open below -----"
