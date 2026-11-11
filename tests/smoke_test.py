@@ -144,7 +144,7 @@ def run_on(h):
              has=("'notes': ['[[lumber-order]]']", "| delivered 10/30", "[no item 00000000]"))
     h.expect("todo pin", "todo_items", "pin", "ecfa0889", "--notes", "[[harvest-supper]]", has=("pinned ecfa0889",))
     h.expect("pinned item leaves --unpinned", "todo_items", "list", "--unpinned", lacks=("ecfa0889",))
-    h.expect("todo unpin", "todo_items", "unpin", "ecfa0889", has=("pinned ecfa0889",))
+    h.expect("todo unpin", "todo_items", "unpin", "ecfa0889", has=("unpinned ecfa0889",))
     h.expect("unpinned item is back in --unpinned", "todo_items", "list", "--unpinned", has=("ecfa0889",))
     h.expect("pin of an unknown id exits non-zero", "todo_items", "pin", "00000000", code="nonzero",
              has=("no item 00000000",), where="stderr")

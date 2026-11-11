@@ -30,8 +30,9 @@ Last touched is the newest of: `last_touched`; the latest thought-log day matchi
 (when the thought log add-on is configured); and the newest dated "## Log" bullet (when
 aging.count_log_entries is on, the default without a thought log).
 
-Only proposed/dormant are left out of the ranking until confirmed, and they do not age. When the
-owner confirms one (moves it to a ranked state), set last_touched to the confirmation date so aging
+The default list leaves out proposed/dormant notes (until confirmed; they do not age either) and
+notes still waiting on a live dependency; --all shows them. When the owner confirms a proposed or
+dormant note (moves it to a ranked state), set last_touched to the confirmation date so aging
 starts from there.
 
 Usage:
@@ -188,7 +189,8 @@ def own_score(n, notes, mentioned):
             why.append(f"+{over:.1f} nudge overdue (every {every}d)")
     deps = slugs(meta.get("depends_on"))
     if deps and all(notes.get(d, {}).get("meta", {}).get("state") in CLOSED for d in deps):
-        finished = max((as_date(notes[d]["meta"].get("done_on")) for d in deps), default=None)
+        # A dead (or done) dependency may have no done_on; it simply gives no date for the bump.
+        finished = max((d for d in (as_date(notes[d]["meta"].get("done_on")) for d in deps) if d), default=None)
         if finished:
             bump = UNBLOCK_BUMP * 0.5 ** ((TODAY - finished).days / UNBLOCK_HALF_LIFE)
             score += bump

@@ -148,11 +148,11 @@ def cmd_pin(a):
     os.makedirs(os.path.dirname(PINS), exist_ok=True)
     with open(PINS, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
-    print("pinned", a.id)
+    print(getattr(a, "verb", "pinned"), a.id)
 
 
 def cmd_unpin(a):
-    a.notes, a.context, a.status, a.why = [], [], "unknown", "unpinned"
+    a.notes, a.context, a.status, a.why, a.verb = [], [], "unknown", "unpinned", "unpinned"
     cmd_pin(a)
 
 
