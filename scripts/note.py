@@ -9,7 +9,9 @@ Usage:
   note.py log SLUG "YYYY-MM-DD: text"      dated bullet into ## Log, in date order
   note.py question SLUG "text"             bullet appended to ## Open questions
   note.py set SLUG KEY VALUE               front-matter field; VALUE is YAML ([a, b], 3, 2026-10-09);
-                                           depends_on must be a list of [[slug]] links, part_of one link
+                                           depends_on must be a list of [[slug]] links that closes
+                                           no loop (notes waiting on each other or on themselves);
+                                           part_of must be one [[slug]] link
   note.py unset SLUG KEY
   note.py show SLUG
 
@@ -401,6 +403,24 @@ def warn_missing(root, key, slugs):
         print(f"note.py: warning: {key} names [[{s}]], which {why}", file=sys.stderr)
 
 
+def loop_text_through(root, slug, deps):
+    """'slug -> b -> ... -> slug' when DEPS as the depends_on of note SLUG would close a loop,
+    using every other note under ROOT as priority.py and links.py read it; '' if none."""
+    import priority  # only needed here
+    graph = {}
+    for p in note_paths(root):
+        try:
+            with open(p, encoding="utf-8") as f:
+                meta = priority.front_matter(f.read())[0]
+        except Exception:  # unreadable or bad front matter: links.py reports it; it names nothing
+            meta = {}
+        graph[os.path.splitext(os.path.basename(p))[0]] = \
+            priority.slugs(meta.get("depends_on")) if isinstance(meta, dict) else []
+    graph[slug] = deps
+    loop = priority.loop_through(graph, slug)
+    return priority.loop_text(loop) if loop else ""
+
+
 def cmd_set(root, a):
     if not re.match(r"^[A-Za-z_][\w-]*$", a.key):
         die(f"bad key '{a.key}'")
@@ -412,6 +432,12 @@ def cmd_set(root, a):
     problem = link_problem(a.key, value, a.value, a.slug)
     if problem:
         die(problem)
+    if a.key == "depends_on":
+        slug = os.path.splitext(os.path.basename(note.path))[0]
+        loop = loop_text_through(root, slug, [link_target(i) for i in value])
+        if loop:
+            die(f"depends_on would make a loop, so these notes would wait on each other forever: {loop}"
+                f" (loops are refused whatever the notes' states, so reopening a done note cannot hide them)")
     if a.key in LINK_FORM:
         warn_missing(root, a.key, [link_target(i) for i in (value if a.key == "depends_on" else [value])])
     # keep the user's own spelling when it is one line and means the same thing

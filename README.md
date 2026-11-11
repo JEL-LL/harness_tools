@@ -89,6 +89,13 @@ still pushes pressure onto that dependency. A dependency with no state, or with 
 does not hide it (`priority.py` lists missing ones under "depends_on names with no note yet").
 So a `state: blocked` note with no unfinished tracked dependency stays in the default list.
 For `depends_on` and for knob conditions, `dead` counts as finished, like `done`.
+A loop (a note that depends on itself, or notes that depend on each other) would keep every note
+in it waiting forever. `note.py set` refuses to write one, and `links.py check` fails on (and the
+review digest names) one written by hand, whatever the states of the notes in it: a loop through a
+done or untracked note hides nothing yet, but would as soon as that note is reopened or tracked.
+`priority.py` names only the loops that are hiding notes now (all members tracked and not done or
+dead). A hand-written `depends_on` that is one string (`"[[slug]]"`) counts as a one-item list;
+any other non-list value names nothing.
 
 Proposed and dormant notes do not age, so an old idea found in old material does not shoot up
 the list. When the person confirms one, set its state and `last_touched` to the confirmation

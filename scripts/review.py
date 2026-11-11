@@ -165,13 +165,15 @@ def branches(repo_cfg):
 def link_health(rows, notes, errors):
     p = links.problems(notes, errors)
     out = [f"- {len(notes)} notes, {len(p['broken'])} broken links, {len(p['errors'])} parse errors,"
-           f" {len(p['duplicates'])} duplicate slugs, {len(p['untyped'])} untyped, {len(p['ageless'])} ageless"]
+           f" {len(p['duplicates'])} duplicate slugs, {len(p['untyped'])} untyped, {len(p['ageless'])} ageless,"
+           f" {len(p['cycles'])} depends_on loops"]
     missing = sorted({t for _, t in p["broken"]})
     if missing:
         out.append(f"- links with no note yet: {', '.join(f'[[{t}]]' for t in missing)}")
     if p["errors"]:
         out += [f"- parse error: {links.rel(path)}: {msg}" for path, msg in p["errors"]]
-    if not (p["broken"] or p["errors"] or p["duplicates"] or p["untyped"] or p["ageless"]):
+    out += [f"- depends_on loop: {priority.loop_text(l)}" for l in p["cycles"]]
+    if not (p["broken"] or p["errors"] or p["duplicates"] or p["untyped"] or p["ageless"] or p["cycles"]):
         return []
     return out
 

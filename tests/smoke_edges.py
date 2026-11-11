@@ -16,6 +16,7 @@ def run(tmp):
     print("\n== Run 4: edge cases ==")
     h = Harness(tmp, "edges")
     link_failures(h)
+    dependency_loops(h)
     just_unblocked(h)
     todo_pins(h)
     todo_sources(h)
@@ -38,6 +39,82 @@ def link_failures(h):
     h.write("concordance/people/dana.md", dana)
     os.remove(h.path("concordance", "places", "sam.md"))
     h.expect("links check is clean again after undoing", "links", "check", lacks=("Broken links:", "Duplicate"))
+
+
+def dependency_loops(h):
+    """Loops written by hand are reported; note.py refuses to write one; odd notes do not break either."""
+    proj = lambda s: f"concordance/projects/{s}.md"
+    # written by hand: a two-note loop between live notes plus a self-loop, at the same time. compost-bins
+    # (first in slug order) leads into the roof loop, so Tarjan finds that loop before garden-season's:
+    # the report must still be in slug order.
+    permit = h.edit(proj("roof-permit"), "state: waiting\n", 'state: waiting\ndepends_on: ["[[tool-shed-roof]]"]\n')
+    bins = h.edit(proj("compost-bins"), "state: waiting\n", 'state: waiting\ndepends_on: ["[[tool-shed-roof]]"]\n')
+    season = h.edit("concordance/projects/garden-season.md", "state: active\n",
+                    'state: active\ndepends_on: ["[[garden-season]]"]\n')
+    loop, self_loop = "roof-permit -> tool-shed-roof -> roof-permit", "garden-season -> garden-season"
+    h.expect("links check fails on two loops, one a self-loop", "links", "check", code=1,
+             has=("depends_on loops (these notes wait on each other forever):", f"  {self_loop}\n  {loop}\n",
+                  "2 depends_on loops"))
+    h.expect("priority names both live loops", "priority", "--all",
+             has=(f"depends_on loops (these notes wait on each other forever): {self_loop}; {loop}",))
+    h.expect("review shows the loops under Link health", "review", "--stdout",
+             has=("## Link health", "2 depends_on loops", f"- depends_on loop: {self_loop}", f"- depends_on loop: {loop}"))
+    h.write(proj("roof-permit"), permit)
+    h.write(proj("compost-bins"), bins)
+    h.write("concordance/projects/garden-season.md", season)
+    lumber = h.edit(proj("lumber-order"), "state: done\n", 'state: done\ndepends_on: ["[[raised-beds]]"]\n')
+    h.expect("links check also fails on a loop through a done note", "links", "check", code=1,
+             has=("  lumber-order -> raised-beds -> lumber-order",))
+    h.expect("priority stays quiet about a loop through a done note", "priority", "--all", lacks=("loops",))
+    h.write(proj("lumber-order"), lumber)
+    dana = h.edit("concordance/people/dana.md", "type: person\n", "type: person\ndepends_on: 3\n")
+    h.expect("links check copes with a depends_on that is not a list", "links", "check", has=("0 depends_on loops",))
+    h.expect("review copes with it too", "review", "--stdout", lacks=("depends_on loop",))
+    h.write("concordance/people/dana.md", dana.replace("type: person\n", 'type: person\ndepends_on: "[[dana]]"\n'))
+    h.expect("a one-string depends_on counts as a one-item list", "links", "check", code=1, has=("  dana -> dana",))
+    h.write("concordance/people/dana.md", dana)
+    bins = h.edit(proj("compost-bins"), "state: waiting\n", 'state: waiting\ndepends_on: ""\n')
+    h.expect("an empty-string depends_on on a tracked note names nothing", "priority", "--all",
+             lacks=("depends_on names with no note yet",))
+    h.write(proj("compost-bins"), bins)
+
+    # note.py refuses to write one
+    files = {s: h.read(proj(s)) for s in ("roof-permit", "tool-shed-roof", "lumber-order", "raised-beds")}
+    h.expect("note.py refuses a note depending on itself", "note", "set", "roof-permit", "depends_on",
+             '["[[roof-permit]]"]', code=1, where="stderr", has=("would make a loop", "roof-permit -> roof-permit"))
+    h.expect("note.py refuses a two-note loop, named from the note typed in another case", "note", "set",
+             "ROOF-PERMIT", "depends_on", '["[[compost-bins]]", "[[tool-shed-roof]]"]', code=1, where="stderr",
+             has=(loop,))
+    check("refused loops leave the notes unchanged", all(h.read(proj(s)) == t for s, t in files.items()))
+    h.expect("a chain that is not a loop is fine", "note", "set", "lumber-order", "depends_on",
+             '["[[tool-shed-roof]]"]', has=("set depends_on",))
+    h.expect("note.py names a three-note loop from the note being set", "note", "set", "tool-shed-roof", "depends_on",
+             '["[[raised-beds]]"]', code=1, where="stderr",
+             has=("tool-shed-roof -> raised-beds -> lumber-order -> tool-shed-roof",))
+    check("  ... and leaves tool-shed-roof unchanged", h.read(proj("tool-shed-roof")) == files["tool-shed-roof"])
+    h.write(proj("lumber-order"), files["lumber-order"])
+
+    # a loop already elsewhere does not hide the new one; a note with broken front matter does not block
+    side = {"loop-a": '["[[loop-c]]", "[[loop-b]]"]', "loop-b": '["[[loop-a]]"]', "loop-c": None}
+    for s, deps in side.items():
+        h.write(f"concordance/concepts/{s}.md", "---\ntype: concept\n" +
+                (f"depends_on: {deps}\n" if deps else "") + f"---\n# {s}\n")
+    odd = {"half-written": b"---\ntype: concept\nstate: active\n# never closed\n",
+           "bad-yaml": b"---\ntype: [unclosed\n---\n# bad\n",
+           "bad-bytes": b"---\ntype: concept\n---\n# \xff\xfe not utf-8\n"}
+    for s, data in odd.items():
+        with open(h.path("concordance", "concepts", f"{s}.md"), "wb") as f:
+            f.write(data)
+    h.expect("note.py catches a new loop next to an old one", "note", "set", "loop-c", "depends_on", '["[[loop-b]]"]',
+             code=1, where="stderr", has=("loop-c -> loop-b -> loop-a -> loop-c",))
+    h.expect("note.py sets depends_on despite other notes' broken front matter, bad YAML or bad bytes", "note", "set",
+             "roof-permit", "depends_on", '["[[lumber-order]]"]', has=("set depends_on",),
+             lacks=("half-written", "bad-yaml", "bad-bytes"))
+    for s in list(side) + list(odd):
+        os.remove(h.path("concordance", "concepts", f"{s}.md"))
+    h.write(proj("roof-permit"), files["roof-permit"])
+    check("notes are back to how they were", all(h.read(proj(s)) == t for s, t in files.items()))
+    h.expect("links check is clean again", "links", "check", has=("0 broken links", "0 depends_on loops"))
 
 
 def just_unblocked(h):

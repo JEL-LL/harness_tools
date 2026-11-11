@@ -7,8 +7,8 @@ shows up as a parse error until it is finished.
 
 Usage:
   python links.py [check]          broken links, duplicate slugs, bad front matter,
-                                   tracked notes that can never age; exit 1 on broken
-                                   links or parse errors
+                                   depends_on loops, tracked notes that can never age;
+                                   exit 1 on broken links, parse errors or loops
   python links.py backlinks SLUG   notes that link to SLUG
   python links.py index            regenerate concordance/INDEX.md
   python links.py orphans          notes with no links in or out
@@ -71,13 +71,16 @@ def can_age(n):
 
 def problems(notes, errors):
     """Everything `check` reports, as data: broken (slug, target) pairs, parse errors, duplicate slugs,
-    untyped notes, ageless notes (state but nothing to age from)."""
+    untyped notes, ageless notes (state but nothing to age from), depends_on loops (any state:
+    a loop through a done note does not hide anything yet, but reopening it would)."""
+    graph = {s: priority.slugs(n["meta"].get("depends_on")) for s, n in notes.items()}
     return {
         "broken": sorted((s, t) for s, n in notes.items() for t in n["links"] if t not in notes),
         "errors": sorted(errors),
         "duplicates": duplicates(),
         "untyped": sorted(s for s, n in notes.items() if not n["meta"].get("type")),
         "ageless": sorted(s for s, n in notes.items() if n["meta"].get("state") and not can_age(n)),
+        "cycles": priority.dependency_cycles(graph),
     }
 
 
@@ -101,9 +104,15 @@ def check(notes, errors):
     if ageless:
         what = "no mentions or last_touched" if config.thought_log_enabled() else "nothing to age from"
         print(f"state but {what} (never ages):", ", ".join(ageless))
+    cycles = p["cycles"]
+    if cycles:
+        print("depends_on loops (these notes wait on each other forever):")
+        for loop in cycles:
+            print(f"  {priority.loop_text(loop)}")
     print(f"{len(notes)} notes, {len(broken)} broken links, {len(errors)} parse errors, "
-          f"{len(dups)} duplicate slugs, {len(untyped)} untyped, {len(ageless)} ageless")
-    return 1 if broken or errors else 0
+          f"{len(dups)} duplicate slugs, {len(untyped)} untyped, {len(ageless)} ageless, "
+          f"{len(cycles)} depends_on loops")
+    return 1 if broken or errors or cycles else 0
 
 
 def index(notes):

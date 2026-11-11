@@ -69,7 +69,8 @@ def run_on(h):
 
     # links
     h.expect("links check: no broken links, nothing ageless", "links", "check",
-             has=("16 notes, 0 broken links, 0 parse errors, 0 duplicate slugs, 0 untyped, 0 ageless",))
+             has=("16 notes, 0 broken links, 0 parse errors, 0 duplicate slugs, 0 untyped, 0 ageless, "
+                  "0 depends_on loops",))
     h.expect("links backlinks", "links", "backlinks", "garden-season", has=("raised-beds", "compost-bins"))
     p = h.expect("links orphans", "links", "orphans")
     check("links orphans: the example has none", not p.stdout.strip(), p.stdout)

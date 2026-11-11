@@ -12,7 +12,7 @@ matter has a `state`. All numbers are optional; defaults are below.
   last_touched: 2026-03-11   # optional; see "last touched" below
   mentions: ['(?i)\bgarden\b']  # regexes that count as "touched" in the thought log (add-on)
   nudge_every: 14            # days; once exceeded, adds 1 per extra nudge period
-  depends_on: ["[[other]]"]  # this waits until every dependency is done
+  depends_on: ["[[other]]"]  # this waits until every dependency is done (loops are reported)
   done_on: 2026-09-01        # when state became done (gives dependents an unblock bump)
   knobs:                     # push down (positive) or lift (negative)
     - amount: 4
@@ -73,6 +73,15 @@ def note_paths():
             if not (os.path.basename(p)[0].isupper() or os.path.basename(p).startswith("_"))]
 
 
+def front_matter(text):
+    """(meta, body) of a note's text, as every script reads it. Raises yaml.YAMLError on bad YAML;
+    meta may be a non-mapping when the front matter is not a mapping."""
+    if not text.startswith("---"):
+        return {}, text
+    end = text.find("\n---", 3)
+    return yaml.safe_load(text[3:end]) or {}, text[end + 4:]
+
+
 def load_notes(errors=None):
     """errors: optional list; when given, unreadable notes are skipped and (path, message) appended."""
     notes = {}
@@ -80,13 +89,7 @@ def load_notes(errors=None):
         slug = os.path.splitext(os.path.basename(path))[0]
         try:
             text = open(path, encoding="utf-8").read()
-            meta = {}
-            if text.startswith("---"):
-                end = text.find("\n---", 3)
-                meta = yaml.safe_load(text[3:end]) or {}
-                body = text[end + 4:]
-            else:
-                body = text
+            meta, body = front_matter(text)
             if errors is not None and not isinstance(meta, dict):
                 raise ValueError("front matter is not a mapping")
         except Exception as e:
@@ -100,11 +103,96 @@ def load_notes(errors=None):
 
 
 def slugs(values):
+    """Slugs named by a depends_on value: a list of [[slug]] (or bare slug) items, or one string.
+    Anything else (a number, a mapping) names nothing; note.py refuses to write such values."""
+    if not values or not isinstance(values, (str, list)):
+        return []
+    if isinstance(values, str):
+        values = [values]
     out = []
-    for v in values or []:
+    for v in values:
         m = LINK.search(str(v))
         out.append(m.group(1) if m else str(v))
     return out
+
+
+def loop_through(graph, slug, within=None):
+    """A shortest dependency loop through SLUG in GRAPH (slug -> slugs it depends on), as
+    [slug, b, ...] meaning slug -> b -> ... -> slug; [slug] when it depends on itself; [] if none.
+    WITHIN, when given, limits the search to those slugs (a loop never leaves its own group)."""
+    allowed = graph if within is None else within
+    parent, queue = {}, []
+    for d in dict.fromkeys(graph.get(slug, ())):
+        if d == slug:
+            return [slug]
+        if d in graph and d in allowed and d not in parent:
+            parent[d] = slug
+            queue.append(d)
+    for v in queue:  # breadth first; the queue grows while it is read
+        for d in graph[v]:
+            if d == slug:
+                path = [v]
+                while path[-1] != slug:
+                    path.append(parent[path[-1]])
+                return path[::-1]
+            if d in graph and d in allowed and d not in parent:
+                parent[d] = v
+                queue.append(d)
+    return []
+
+
+def dependency_cycles(graph):
+    """One loop for every group of notes that wait on each other (a strongly connected group of
+    GRAPH, slug -> slugs it depends on), each from loop_through() of the group's first slug, in
+    slug order. Every note in such a group waits on another forever. Iterative Tarjan, so deep
+    graphs need no recursion."""
+    index, low, on_stack, stack, groups = {}, {}, set(), [], []
+    for root in sorted(graph):
+        if root in index:
+            continue
+        work = [(root, iter(sorted(set(graph[root]))))]
+        index[root] = low[root] = len(index)
+        stack.append(root)
+        on_stack.add(root)
+        while work:
+            v, deps = work[-1]
+            w = next(deps, None)
+            if w is not None:
+                if w not in graph:
+                    continue
+                if w not in index:
+                    index[w] = low[w] = len(index)
+                    stack.append(w)
+                    on_stack.add(w)
+                    work.append((w, iter(sorted(set(graph[w])))))
+                elif w in on_stack:
+                    low[v] = min(low[v], index[w])
+                continue
+            work.pop()
+            if work:
+                low[work[-1][0]] = min(low[work[-1][0]], low[v])
+            if low[v] == index[v]:
+                group = []
+                while True:
+                    w = stack.pop()
+                    on_stack.discard(w)
+                    group.append(w)
+                    if w == v:
+                        break
+                if len(group) > 1 or v in graph[v]:
+                    groups.append((min(group), set(group)))
+    return [loop_through(graph, s, within) for s, within in sorted(groups, key=lambda g: g[0])]
+
+
+def loop_text(loop):
+    return " -> ".join(loop + loop[:1])
+
+
+def live_cycles(notes):
+    """Loops among notes that are tracked and not done or dead: the ones that hide notes."""
+    live = {s for s, n in notes.items() if n["meta"].get("state") and n["meta"]["state"] not in CLOSED}
+    return dependency_cycles({s: [d for d in slugs(notes[s]["meta"].get("depends_on")) if d in live]
+                              for s in live})
 
 
 def last_mentions(notes):
@@ -273,6 +361,10 @@ def main():
         print(f"        {'; '.join(r['why'])}")
     if missing:
         print("\ndepends_on names with no note yet:", ", ".join(missing))
+    loops = live_cycles(notes)
+    if loops:
+        print("\ndepends_on loops (these notes wait on each other forever):",
+              "; ".join(loop_text(l) for l in loops))
 
 
 if __name__ == "__main__":
