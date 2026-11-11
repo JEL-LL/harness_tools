@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+# A harness's own settings and data never belong in this repo (root only, so example/ is kept).
+/harness.yaml
+/concordance/
+/scans/
+/pins/
+/reviews/

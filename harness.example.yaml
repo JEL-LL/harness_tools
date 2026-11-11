@@ -1,0 +1,59 @@
+# Copy to harness.yaml in your harness folder and keep only what you need.
+# Every key is optional: with no harness.yaml at all you get the core (notes, ranking,
+# links, reviews). Relative paths are taken from the harness folder; ~ and $VARS expand.
+
+# Who the harness works for. Shown in review headings ("Questions for <owner>").
+owner: the owner
+
+# Where things live (defaults shown).
+concordance: concordance          # the notes, one folder per kind
+scans: scans                      # thought log scan passes (add-on)
+pins: pins/todo.jsonl             # todo pins (add-on)
+reviews: reviews                  # review digests written by review.py
+
+# Note kinds: folder name -> type written into new notes by note.py (defaults shown).
+kinds:
+  projects: project
+  hardware: hardware
+  machines: machine
+  people: person
+  concepts: concept
+  places: place
+  orgs: org
+
+# ---- Add-on: a running thought log (one file, newest days at the bottom) ----
+# Leave this section out if you don't keep one; nothing else depends on it.
+thought_log:
+  path: ~/notes/thinking.txt
+  # A day starts at a line matching this regex. Its three groups are read in date_order.
+  date_line: '^(\d{2})/(\d{2})/(\d{4})\s*$'   # e.g. 11/09/2026
+  date_order: mdy                             # change together with date_line: ymd for '^(\d{4})-(\d{2})-(\d{2})\s*$'
+  # Optional: everything after a line starting with this text is an inline todo list.
+  inline_todo_marker: "----- inline todo -----"
+  # Optional: weekdays you never write on (0 = Monday ... 6 = Sunday); `thought_log.py dates`
+  # flags stamps on them as likely typos.
+  suspect_weekdays: []
+
+# ---- Add-on: a todo file (items separated by blank lines) ----
+# Leave this section out if you don't keep one.
+todo:
+  path: ~/notes/todo.txt
+  # Optional: items above the line starting with this text are done, items below it are open.
+  # Without it the whole file is open. If it is set but missing from the file, everything is
+  # treated as done (with a warning) so a deleted marker never floods the open list.
+  split_marker: "----- done above, open below -----"
+
+# How a note's "last touched" date is found (see scripts/priority.py).
+aging:
+  # Count the newest dated "## Log" bullet (dates after today ignored) as a touch.
+  # Default: on unless a thought log is configured and present (then `mentions` regexes
+  # against the log do that job). Uncomment to force it either way (true / false, unquoted).
+  # count_log_entries: true
+
+# Extra review sections: long-lived branches in these git repos.
+review:
+  repos: []
+  # - path: ~/code/app
+  #   name: app          # heading text (default: folder name)
+  #   main: main         # main branch (default: master)
+  #   stale_days: 60     # list branches ahead of main whose last commit is older than this
