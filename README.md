@@ -373,3 +373,6 @@ mistake. Never copy credentials or other secrets into notes.
 - `templates/`: `CLAUDE.md` and the `harness-scan` skill for an agent working in a harness.
 - `tests/smoke_test.py` (with `smoke_lib.py`, `smoke_edges.py`): runs every command on a copy of `example/`.
 - `requirements.txt`: PyYAML.
+
+## License
+MIT, copyright LaserLinc, Inc. See `LICENSE`.
