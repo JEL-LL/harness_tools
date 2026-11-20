@@ -27,6 +27,8 @@ Usage:
                                             A still-real item under a done note: re-pin it to a live note.
 
 pin/unpin also work on an orphaned id: the record keeps the "first" line from its last pin.
+pin without --notes / --context keeps the last pin's, so closing an item (--status done-elsewhere)
+keeps its links; a bare --notes or --context (no values) clears them. unpin always clears them.
 """
 import argparse, datetime, hashlib, json, os, re, sys
 
@@ -143,7 +145,10 @@ def cmd_pin(a):
         first = old["first"]  # orphan: the item's first line changed or it was removed
     else:
         sys.exit(f"no item {a.id}")
-    rec = {"id": a.id, "first": first[:120], "notes": [n.strip() for v in (a.notes or []) for n in v.split(",") if n.strip()], "context": a.context or [],
+    # --notes / --context left out: keep the last pin's (a close keeps its links). Given empty: clear them.
+    notes = old.get("notes", []) if a.notes is None and old else [n.strip() for v in (a.notes or []) for n in v.split(",") if n.strip()]
+    context = old.get("context", []) if a.context is None and old else (a.context or [])
+    rec = {"id": a.id, "first": first[:120], "notes": notes, "context": context,
            "status": a.status, "why": a.why or "", "at": datetime.date.today().isoformat()}
     os.makedirs(os.path.dirname(PINS), exist_ok=True)
     with open(PINS, "a", encoding="utf-8") as f:
