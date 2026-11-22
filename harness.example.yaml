@@ -24,7 +24,7 @@ kinds:
 # ---- Add-on: a running thought log (one file, newest days at the bottom) ----
 # Leave this section out if you don't keep one; nothing else depends on it.
 thought_log:
-  path: ~/notes/thinking.txt
+  path: ~/notes/thinking.txt                  # .txt, .docx (Word, Google Docs export) or .odt (LibreOffice)
   # A day starts at a line matching this regex. Its three groups are read in date_order.
   date_line: '^(\d{2})/(\d{2})/(\d{4})\s*$'   # e.g. 11/09/2026
   date_order: mdy                             # change together with date_line: ymd for '^(\d{4})-(\d{2})-(\d{2})\s*$'
@@ -37,7 +37,7 @@ thought_log:
 # ---- Add-on: a todo file (items separated by blank lines) ----
 # Leave this section out if you don't keep one.
 todo:
-  path: ~/notes/todo.txt
+  path: ~/notes/todo.txt                      # .txt, .docx or .odt, like thought_log.path
   # Optional: items above the line starting with this text are done, items below it are open.
   # Without it the whole file is open. If it is set but missing from the file, everything is
   # treated as done (with a warning) so a deleted marker never floods the open list.

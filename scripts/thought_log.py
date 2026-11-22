@@ -1,6 +1,6 @@
 """Read a running thought log live as a sequence of dated segments, and track scan passes over them.
 
-Optional add-on: set thought_log.path in harness.yaml. Without it, every command says so and
+Optional add-on: set thought_log.path in harness.yaml (a .txt, .docx or .odt file; see doc_text.py). Without it, every command says so and
 exits, and segments() returns [] so the rest of the harness carries on.
 
 A segment starts at a line matching thought_log.date_line (default: a line holding only
@@ -25,7 +25,7 @@ Usage:
 import argparse, datetime, hashlib, json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import config
+import config, doc_text
 
 SCANS = config.SCANS
 DATE_RE = re.compile(config.DATE_LINE)
@@ -54,23 +54,22 @@ def segments():
         return []
     segs, cur, seen = [], None, {}
     BAD_STAMPS.clear()
-    with open(config.THOUGHT_LOG, encoding="utf-8-sig", errors="replace") as f:
-        for n, line in enumerate(f, 1):
-            if INLINE_TODO and line.startswith(INLINE_TODO):
-                break
-            m = DATE_RE.match(line)
-            date = None
-            if m:
-                date, why = _iso(m)
-                if date is None:
-                    BAD_STAMPS.append((n, m.group(0).strip(), why))
-            if date:
-                seen[date] = seen.get(date, 0) + 1
-                sid = date if seen[date] == 1 else f"{date}#{seen[date]}"
-                cur = {"id": sid, "date": date, "line": n, "lines": []}
-                segs.append(cur)
-            if cur is not None:
-                cur["lines"].append(line)
+    for n, line in enumerate(doc_text.read_lines(config.THOUGHT_LOG), 1):  # .txt, .docx or .odt
+        if INLINE_TODO and line.startswith(INLINE_TODO):
+            break
+        m = DATE_RE.match(line)
+        date = None
+        if m:
+            date, why = _iso(m)
+            if date is None:
+                BAD_STAMPS.append((n, m.group(0).strip(), why))
+        if date:
+            seen[date] = seen.get(date, 0) + 1
+            sid = date if seen[date] == 1 else f"{date}#{seen[date]}"
+            cur = {"id": sid, "date": date, "line": n, "lines": []}
+            segs.append(cur)
+        if cur is not None:
+            cur["lines"].append(line)
     for s in segs:
         s["text"] = "".join(s.pop("lines"))
         s["hash"] = hashlib.sha1(s["text"].encode()).hexdigest()[:12]

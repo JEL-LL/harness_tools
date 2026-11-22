@@ -195,9 +195,9 @@ safe to leave out.
 
 ### Thought log
 
-A single running text file, one dated section per day, newest at the bottom. `thought_log.path`
-names it; `date_line` (a regex with three groups) and `date_order` (`mdy`, `ymd`, ...) say how a
-day starts. With it:
+A single running document, one dated section per day, newest at the bottom: plain text, Word or
+LibreOffice (see [File formats](#file-formats)). `thought_log.path` names it; `date_line` (a
+regex with three groups) and `date_order` (`mdy`, `ymd`, ...) say how a day starts. With it:
 
 - **Segments.** Each day is a segment with an id like `2026-11-06`; a repeated date gets
   `2026-11-06#2`. `show ID`, `grep REGEX` (case-insensitive unless `-c`) and `stats` read it
@@ -227,8 +227,8 @@ $ HARNESS_ROOT=example python scripts/thought_log.py next --pass discovery-1 -n 
 
 ### Todo pins
 
-A plain todo file, items separated by blank lines, `|` lines under an item being progress
-notes. With `todo.split_marker`, items above the marker line are done and items below are open.
+A todo file (plain text, Word or LibreOffice), items separated by blank lines, `|` lines under an
+item being progress notes. With `todo.split_marker`, items above the marker line are done and items below are open.
 
 - **Stable ids.** An item's id is a short hash of its first line, so editing its progress lines
   keeps the id; changing the first line (for example ticking it) gives a new id.
@@ -254,6 +254,26 @@ $ HARNESS_ROOT=example python scripts/todo_items.py stale
   note done: [[lumber-order]] done 2026-10-30
   evidence days: 2026-10-30
 ```
+
+### File formats
+
+`thought_log.path` and `todo.path` can each name a `.txt`, `.docx` (Word, or a Google Doc
+downloaded as Word) or `.odt` (LibreOffice) file, chosen by the extension in any case. Any other
+extension is read as UTF-8 text. A document is read as one line per paragraph, so a date typed as
+a heading still starts a day and an empty paragraph is a blank line. Only the body counts (no
+headers, footers, footnotes or comments); tracked changes read as accepted; a link keeps its
+address as `text <url>`; each table cell is its own line; a soft line break (Shift+Enter) starts
+a new line; so does a page break inside a paragraph. Hidden text (Word's "hidden" font setting)
+is read like any other text, and equations are left out. Line numbers that the tools print for a
+document count these lines, not pages.
+Word's AutoFormat can turn a typed marker line of dashes into a border; check that
+`todo_items.py list` sees the split and inline todo markers. The harness only reads these files.
+
+Converting a long document takes seconds, so the result is cached in `.cache/` in the harness
+folder, one file per document, and reused until the document's size or modification time
+changes. The folder holds a plain-text copy of each document, which is why it sits in the harness
+(not next to the document) and holds a `.gitignore` of `*` so it never gets committed. It is
+safe to delete at any time; if it cannot be written, the tools just convert every time.
 
 ### Without them
 
@@ -375,12 +395,17 @@ mistake. Never copy credentials or other secrets into notes.
 - `scripts/priority.py`: ranks notes with reasons; `explain SLUG`.
 - `scripts/links.py`: `check`, `backlinks SLUG`, `orphans`, and `index` (writes `concordance/INDEX.md`).
 - `scripts/review.py`: writes the daily review digest.
+- `scripts/doc_text.py`: reads the thought log and todo file as lines, from `.txt`, `.docx` or `.odt`
+  (documents cached in `.cache/`).
 - `scripts/thought_log.py`: thought log add-on: `stats`, `show`, `grep`, `next`, `mark`, `dates`.
 - `scripts/todo_items.py`: todo add-on: `list`, `show`, `pin`, `unpin`, `orphans`, `stale`.
 - `harness.example.yaml`: every setting, commented.
 - `example/`: an invented community-garden harness that uses every feature.
 - `templates/`: `CLAUDE.md` and the `harness-scan` skill for an agent working in a harness.
 - `tests/smoke_test.py` (with `smoke_lib.py`, `smoke_edges.py`): runs every command on a copy of `example/`.
+- `tests/fixtures/`: a short document saved as `.odt` and `.docx` by real LibreOffice Writer, so the
+  reader is tested on real app output. Made-up content only: keep these free of personal data
+  (text and document metadata).
 - `requirements.txt`: PyYAML.
 
 ## License

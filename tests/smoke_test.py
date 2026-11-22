@@ -11,7 +11,8 @@ are asserted, never exact scores.
   Run 2  add-ons off (thought_log and todo removed from harness.yaml)
   Run 3  bad settings: an unknown key and a wrong type stop every script with one line
   Run 4  edge cases (tests/smoke_edges.py): failing link checks, review.repos, HARNESS_CONFIG,
-         null and invalid settings, missing todo sources, odd thought-log stamps, note.py corners
+         null and invalid settings, missing todo sources, odd thought-log stamps, the thought log
+         and todo file as .docx and .odt (built at test time), note.py corners
 """
 import os, re, sys, tempfile
 

@@ -1,13 +1,13 @@
 """Run 4 of the smoke test: edge cases on one more copy of example/. Steps restore the files they
-break (links, todo, thought log, settings); notes they add, log into or set, and the pin
+break (links, todo, thought log, settings) and remove the documents they build; notes they add, log into or set, and the pin
 records they append, are kept.
 
 Date-proofing: "Just unblocked" sets done_on to the scripts' own today (read from review's
 heading), and the git branch is dated 2001, so both hold on any day after the story.
 """
-import json, os, re, shutil, subprocess
+import json, os, re, shutil, subprocess, sys, zipfile
 
-from smoke_lib import Harness, check, lines, skip
+from smoke_lib import REPO, SCRIPTS, Harness, check, docx_paras, lines, odt_paras, skip, write_docx, write_odt
 
 TODAY_RE = re.compile(r"^# Review (\d{4}-\d{2}-\d{2})$", re.M)
 
@@ -22,6 +22,7 @@ def run(tmp):
     todo_sources(h)
     odd_stamps(h)
     bom_first_day(h)
+    documents(h)
     note_corners(h, tmp)
     count_log_entries(h)
     settings(h, tmp)
@@ -181,6 +182,300 @@ def bom_first_day(h):
     h.expect("a leading byte-order mark does not hide the first day", "thought_log", "show", "2026-09-08",
              has=("Walked the lot with Dana and Sam.",))
     h.write("thinking.txt", log)
+
+
+DATE = r"\d{2}/\d{2}/\d{4}$"  # the example's date stamps, written as headings in the documents below
+
+
+def documents(h):
+    """The thought log and the todo file as .docx and .odt read the same as the .txt files."""
+    yml = h.read("harness.yaml")
+    log, todo = h.read("thinking.txt"), h.read("todo.txt")
+    ids, seen = [], {}
+    for line in log.splitlines():
+        if re.match(DATE, line):
+            d = f"{line[6:]}-{line[:2]}-{line[3:5]}"
+            seen[d] = seen.get(d, 0) + 1
+            ids.append(d if seen[d] == 1 else f"{d}#{seen[d]}")
+    want_days = h.run("thought_log", "show", *ids).stdout
+    want_items = h.run("todo_items", "list", "--source", "all").stdout
+    check("the txt days and items to compare against are there", "Walked the lot" in want_days
+          and "ask the association" in want_items and len(lines(h.run("todo_items", "list", "--source", "done"))) == 2)
+
+    write_docx(h.path("thinking.docx"), docx_paras(log, DATE))
+    write_odt(h.path("thinking.ODT"), odt_paras(log, DATE))  # the extension is matched in any case
+    for name in ("thinking.docx", "thinking.ODT"):
+        h.write("harness.yaml", yml.replace("path: thinking.txt", f"path: {name}"))
+        p = h.expect(f"{name}: show every day, date stamps written as headings", "thought_log", "show", *ids)
+        check(f"{name}: every day reads the same as the txt", p.stdout == want_days, p.stdout[:300])
+        p = h.expect(f"{name}: inline todo and todo items", "todo_items", "list", "--source", "all")
+        check(f"{name}: the same items, ids and order as with the txt", p.stdout == want_items, p.stdout)
+        h.expect(f"{name}: dates still flags the repeat and the Saturday", "thought_log", "dates",
+                 has=("REPEAT  2026-11-06", "SATURDAY 2026-10-17"))
+
+    write_docx(h.path("todo.docx"), docx_paras(todo))
+    h.write("harness.yaml", yml.replace("path: todo.txt", "path: todo.docx"))
+    p = h.expect("todo.docx: split marker, items and progress lines", "todo_items", "list", "--source", "all")
+    check("todo.docx: the same open and done items as todo.txt", p.stdout == want_items, p.stdout)
+    h.expect("todo.docx: an item shows its | lines", "todo_items", "show", "7f530439",
+             has=("| delivered 10/30, stacked under the tarp",))
+
+    docx_features(h, yml)
+    docx_corners(h, yml)
+    odt_features(h, yml)
+    doc_cache(h, yml)
+    real_fixtures(h, yml)
+
+    for name, data in (("thinking.docx", b"PK\x03\x04 not really a zip"), ("todo.docx", os.urandom(300))):
+        with open(h.path(name), "wb") as f:
+            f.write(data)
+    h.write("harness.yaml", yml.replace("path: thinking.txt", "path: thinking.docx"))
+    h.expect("a corrupt .docx thought log stops with one clean message", "thought_log", "stats", code="nonzero",
+             where="stderr", has=("thinking.docx: cannot read it as a .docx document",))
+    h.write("harness.yaml", yml.replace("path: todo.txt", "path: todo.docx"))
+    h.expect("a corrupt .docx todo file stops with one clean message", "todo_items", "list", code="nonzero",
+             where="stderr", has=("todo.docx: cannot read it as a .docx document",))
+    with zipfile.ZipFile(h.path("todo.docx"), "w") as z:
+        z.writestr("_rels/.rels", "<Relationships/>")
+    h.expect("a .docx with no document part stops with one clean message", "todo_items", "list", code="nonzero",
+             where="stderr", has=("todo.docx: cannot read it as a .docx document", "word/document.xml"))
+    h.write("harness.yaml", yml)
+    for name in ("thinking.docx", "thinking.ODT", "todo.docx"):
+        os.remove(h.path(name))
+
+
+def docx_features(h, yml):
+    """Links, field codes, tracked changes, tables and breaks in a Word thought log."""
+    r = lambda t: f'<w:r><w:t xml:space="preserve">{t}</w:t></w:r>'
+    p = lambda *runs: "<w:p>" + "".join(runs) + "</w:p>"
+    head = lambda t: f'<w:p><w:pPr><w:pStyle w:val="Heading2"/><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs>' \
+                     f'</w:pPr>{r(t)}</w:p>'
+    cell = lambda t: f"<w:tc><w:tcPr/>{p(r(t))}</w:tc>"
+    fld = lambda kind: f'<w:r><w:fldChar w:fldCharType="{kind}"/></w:r>'
+    body = "".join([
+        head("11/12/2026"),
+        p(r("Bed plan: "), '<w:hyperlink r:id="rId5">', r("the drawing"), "</w:hyperlink>"),
+        p('<w:fldSimple w:instr=" HYPERLINK &quot;https://example.org/permit&quot; ">', r("permit page"),
+          "</w:fldSimple>"),
+        p(r("Call the "), fld("begin"), '<w:r><w:instrText xml:space="preserve"> HYPERLINK "https://example.org/co</w:instrText>'
+          '</w:r><w:r><w:instrText>op" \\o "tip"</w:instrText></w:r>', fld("separate"), r("co-op"), fld("end"), r(" first")),
+        p('<w:hyperlink r:id="rId6">', r("https://example.org/seeds"), "</w:hyperlink>", r(" and "),
+          '<w:hyperlink r:id="rId7">', r("dana@example.org"), "</w:hyperlink>"),
+        p(r("See "), '<w:hyperlink w:anchor="_Toc1">', r("the list above"), "</w:hyperlink>"),
+        p(r("Buy "), '<w:del w:id="1" w:author="x"><w:r><w:delText>twelve</w:delText></w:r></w:del>',
+          '<w:ins w:id="2" w:author="x">', r("ten"), "</w:ins>", r(" bags of mulch")),
+        "<w:tbl><w:tblPr/><w:tr>" + cell("north bed") + cell("south bed") + "</w:tr><w:tr>" + cell("kale")
+        + cell("chard") + "</w:tr></w:tbl>",
+        p(r("first half"), "<w:r><w:br/></w:r>", r("second half"), '<w:r><w:br w:type="page"/><w:tab/></w:r>',
+          r("after a tab"), "<w:r><w:noBreakHyphen/></w:r>", r("ok")),
+        '<w:p><w:pPr><w:rPr><w:del w:id="3" w:author="x"/></w:rPr></w:pPr>' + r("Water the ") + "</w:p>",
+        p(r("seedlings")),
+        "<w:p/>",
+        head("11/13/2026"),
+        p(r("Quiet day.")),
+    ])
+    write_docx(h.path("thinking.docx"), body, {"rId5": "https://example.org/beds", "rId6": "https://example.org/seeds",
+                                               "rId7": "mailto:dana@example.org"})
+    h.write("harness.yaml", yml.replace("path: thinking.txt", "path: thinking.docx"))
+    h.expect("docx: a heading date starts a day; links, fields, tracked changes, table, breaks", "thought_log", "show",
+             "2026-11-12", has=(
+                 "11/12/2026\nBed plan: the drawing <https://example.org/beds>\n",
+                 "\npermit page <https://example.org/permit>\n",
+                 "\nCall the co-op <https://example.org/coop> first\n",
+                 "\nhttps://example.org/seeds and dana@example.org\n",
+                 "\nSee the list above\n",
+                 "\nBuy ten bags of mulch\n",
+                 "\nnorth bed\nsouth bed\nkale\nchard\n",
+                 "\nfirst half\nsecond half\n\tafter a tab-ok\n",
+                 "\nWater the seedlings\n\n"),
+             lacks=("twelve", "HYPERLINK", "tip", "<https://example.org/seeds>", "mailto", "11/13/2026", "\t11/12"))
+    h.expect("docx: line numbers count paragraphs and soft breaks", "thought_log", "next", "--pass", "discovery-1",
+             has=("2026-11-13\tline 17\t", "2026-11-12\tline 1\t"))
+
+
+R = lambda t: f'<w:r><w:t xml:space="preserve">{t}</w:t></w:r>'
+P = lambda *runs: "<w:p>" + "".join(runs) + "</w:p>"
+FLD = lambda kind: f'<w:r><w:fldChar w:fldCharType="{kind}"/></w:r>'
+INSTR = lambda t: f'<w:r><w:instrText xml:space="preserve">{t}</w:instrText></w:r>'
+PAGE = '<w:r><w:br w:type="page"/></w:r>'
+
+
+def docx_corners(h, yml):
+    """Page breaks, nested and doubled links, a joined paragraph before a table, a field never closed."""
+    body = "".join([
+        P(R("11/14/2026")),
+        P(R("before"), PAGE, R("11/15/2026")),  # a date after a mid-paragraph page break starts a day
+        P(PAGE, R("start break")),
+        P(R("end break"), PAGE),
+        P(R("next para"), "<w:r><w:lastRenderedPageBreak/></w:r>", R(" glued")),
+        P(R("If: "), FLD("begin"), INSTR(' IF 1 = 1 "'), FLD("begin"), INSTR('HYPERLINK "https://example.org/hidden"'),
+          FLD("separate"), R("inner"), FLD("end"), INSTR('" ""'), FLD("separate"), R("shown"), FLD("end")),
+        P('<w:hyperlink r:id="rId8">', FLD("begin"), INSTR('HYPERLINK "https://example.org/dbl"'), FLD("separate"),
+          R("dbl"), FLD("end"), "</w:hyperlink>"),
+        P('<w:hyperlink r:id="rId9">', R("https://example.org/x"), "</w:hyperlink>"),
+        P('<w:hyperlink r:id="rId10">', R("no mode"), "</w:hyperlink>", R(" and "),
+          '<w:hyperlink r:id="rId11">', R("a picture"), "</w:hyperlink>"),
+        '<w:p><w:pPr><w:rPr><w:del w:id="4" w:author="x"/></w:rPr></w:pPr>' + R("carried") + "</w:p>",
+        "<w:tbl><w:tr><w:tc>" + P(R("cell one")) + "</w:tc></w:tr></w:tbl>",
+    ])
+    write_docx(h.path("thinking.docx"), body, {"rId8": "https://example.org/dbl", "rId9": "https://example.org/x/",
+                                               "rId10": "https://example.org/nomode", "rId11": "media/image1.png"},
+               no_mode=("rId10", "rId11"))
+    h.write("harness.yaml", yml.replace("path: thinking.txt", "path: thinking.docx"))
+    h.expect("docx: a mid-paragraph page break starts a new line", "thought_log", "show", "2026-11-14",
+             has=("11/14/2026\nbefore\n",), lacks=("11/15",))
+    h.expect("docx: a page break at either end of a paragraph adds no blank line", "thought_log", "show",
+             "2026-11-15", has=("11/15/2026\nstart break\nend break\nnext para glued\n",))
+    h.expect("docx: nested, doubled and slash-ended links; no-mode rels; a joined line before a table",
+             "thought_log", "show", "2026-11-15", has=(
+                 "\nIf: shown\n", "\ndbl <https://example.org/dbl>\n", "\nhttps://example.org/x\n",
+                 "\nno mode <https://example.org/nomode> and a picture\n", "\ncarried\ncell one\n"),
+             lacks=("hidden", "inner", "IF 1", "dbl> <", "<https://example.org/x/>", "image1"))
+
+    write_docx(h.path("thinking.docx"), "".join([
+        P(R("11/16/2026")), P(R("a field "), FLD("begin"), INSTR(" PAGE "), R("never closed")),
+        P(R("11/17/2026")), P(R("still here"))]))
+    p = h.expect("docx: a field never closed loses nothing after it", "thought_log", "show", "2026-11-17",
+                 has=("11/17/2026\nstill here\n",))
+    check("  ... and warns once on stderr, naming the file",
+          p.stderr.count("never closed") == 1 and "thinking.docx" in p.stderr, p.stderr)
+
+
+def doc_cache(h, yml):
+    """Converted documents are cached in .cache/ and the cache is never trusted when stale."""
+    trace = {"HARNESS_DOC_TRACE": "1"}
+    cache = h.path(".cache")
+    shutil.rmtree(cache, ignore_errors=True)
+    write_docx(h.path("thinking.docx"), docx_paras(h.read("thinking.txt"), DATE))
+    h.write("harness.yaml", yml.replace("path: thinking.txt", "path: thinking.docx"))
+    first = h.expect("cache: the first read parses the document", "thought_log", "show", "2026-11-10", env=trace,
+                     where="stderr", has=("doc_text: parsed thinking.docx",))
+    check("cache: .cache/.gitignore ignores the folder itself", os.path.isfile(os.path.join(cache, ".gitignore"))
+          and h.read(".cache", ".gitignore") == "*\n")
+    check("cache: one cache file for the document",
+          len([f for f in os.listdir(cache) if f.endswith(".json")]) == 1, os.listdir(cache))
+    p = h.expect("cache: the second read uses it", "thought_log", "show", "2026-11-10", env=trace, where="stderr",
+                 has=("doc_text: cache thinking.docx",), lacks=("parsed",))
+    check("  ... with the same output", p.stdout == first.stdout and "Picked a date" in p.stdout, p.stdout)
+    p = h.expect("cache: review reads the log twice but converts it at most once", "review", "--stdout", env=trace,
+                 where="stderr", has=("doc_text: memory thinking.docx",), lacks=("parsed",))
+    check("  ... one read from the cache", p.stderr.count("doc_text: cache") == 1, p.stderr)
+
+    write_docx(h.path("thinking.docx"), docx_paras(h.read("thinking.txt").replace(
+        "Picked a date", "Picked a new date"), DATE))
+    p = h.expect("cache: editing the document makes it stale", "thought_log", "show", "2026-11-10", env=trace,
+                 where="stderr", has=("doc_text: parsed thinking.docx",))
+    check("  ... and the new text is read", "Picked a new date" in p.stdout, p.stdout)
+    name = next(f for f in os.listdir(cache) if f.endswith(".json"))
+    with open(os.path.join(cache, name), "w", encoding="utf-8") as f:
+        f.write('{"key": [1, "x"], "lines": ')
+    p = h.expect("cache: a damaged cache file is ignored", "thought_log", "show", "2026-11-10", env=trace,
+                 where="stderr", has=("doc_text: parsed thinking.docx",))
+    check("  ... and the output is right", "Picked a new date" in p.stdout, p.stdout)
+    h.expect("cache: ... and rewritten", "thought_log", "show", "2026-11-10", env=trace, where="stderr",
+             has=("doc_text: cache thinking.docx",))
+
+    shutil.rmtree(cache)
+    with open(cache, "w", encoding="utf-8") as f:  # a file where the folder should be: no cache possible
+        f.write("not a folder")
+    for n in (1, 2):
+        p = h.expect(f"cache: unusable cache folder, read {n} still works", "thought_log", "show", "2026-11-10",
+                     env=trace, where="stderr", has=("doc_text: parsed thinking.docx",))
+        check(f"  ... read {n} output is right", "Picked a new date" in p.stdout, p.stdout)
+    os.remove(cache)
+
+    # Exact round trip through the cache: tabs, trailing spaces, empty lines, a carriage return.
+    write_docx(h.path("exact.docx"), P(R("tab\there  ")) + "<w:p/>" + P(R("cr&#13;inside")) + P(R("  lead")))
+    code = ("import json, sys; sys.path.insert(0, sys.argv[1]); import doc_text\n"
+            "a = doc_text.read_lines(sys.argv[2]); doc_text._MEMO.clear(); b = doc_text.read_lines(sys.argv[2])\n"
+            "print(json.dumps([a, b]))")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HARNESS_")}
+    env.update(HARNESS_ROOT=h.root, HARNESS_DOC_TRACE="1", PYTHONIOENCODING="utf-8")
+    p = subprocess.run([sys.executable, "-B", "-c", code, SCRIPTS, h.path("exact.docx")], capture_output=True,
+                       text=True, encoding="utf-8", env=env, cwd=h.tmp)
+    want = ["tab\there  \n", "\n", "cr\rinside\n", "  lead\n"]
+    try:
+        a, b = json.loads(p.stdout)
+    except ValueError:
+        a = b = None
+    check("cache: lines come back from the cache exactly", a == want and b == want
+          and p.stderr.split() == "doc_text: parsed exact.docx doc_text: cache exact.docx".split(),
+          f"{p.stdout!r} {p.stderr!r}")
+    os.remove(h.path("exact.docx"))
+
+
+FIXTURES = os.path.join(REPO, "tests", "fixtures")
+# What tests/fixtures/libreoffice-sample.{odt,docx} read as. Both were typed in LibreOffice Writer 24.2
+# (11/03/2026 as a Heading 1, a trailing space and tab, a soft break, a link, a table, a tracked
+# deletion) and saved in each format: real app output, not XML written to fit the reader.
+FIXTURE_LINES = ['11/03/2026\n', 'Started the bean trellis. \t\n', 'This line ends with a soft break\n',
+                 'and continues here.\n', '\n', '11/04/2026\n',
+                 'See the seed catalog <https://example.org/seeds> and https://example.org/compost for ideas.\n',
+                 '\n', '\n', 'Table column A\n', 'Table column B\n', 'A text\n', 'B text\n', '\n', '\n',
+                 '----- inline todo -----\n', 'Buy twine\n', 'Fix the gate latch\n']
+
+
+def real_fixtures(h, yml):
+    """Documents saved by a real LibreOffice read as expected, in both formats."""
+    names = ("libreoffice-sample.odt", "libreoffice-sample.docx")
+    # Read in place; HARNESS_ROOT is the temp copy, so the cache lands there, never in the repo.
+    code = ("import json, sys; sys.path.insert(0, sys.argv[1]); import doc_text\n"
+            "print(json.dumps([doc_text.read_lines(p) for p in sys.argv[2:]]))")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HARNESS_")}
+    env.update(HARNESS_ROOT=h.root, PYTHONIOENCODING="utf-8")
+    p = subprocess.run([sys.executable, "-B", "-c", code, SCRIPTS, *(os.path.join(FIXTURES, n) for n in names)],
+                       capture_output=True, text=True, encoding="utf-8", env=env, cwd=h.tmp)
+    try:
+        got = json.loads(p.stdout)
+    except ValueError:
+        got = [None] * len(names)
+    for name, lines_ in zip(names, got):
+        check(f"{name}: reads exactly as expected", lines_ == FIXTURE_LINES, f"{lines_!r} {p.stderr[-600:]!r}")
+    check("fixtures: no cache was written into the repo", not os.path.exists(os.path.join(FIXTURES, ".cache"))
+          and not os.path.exists(os.path.join(REPO, ".cache")))
+    for name in names:
+        shutil.copy(os.path.join(FIXTURES, name), h.path(name))
+        h.write("harness.yaml", yml.replace("path: thinking.txt", f"path: {name}"))
+        h.expect(f"{name}: two days, the first from a heading", "thought_log", "stats",
+                 has=("segments: 2  first: 2026-11-03  last: 2026-11-04",))
+        h.expect(f"{name}: the tracked deletion is gone", "thought_log", "grep", "sentence",
+                 lacks=("Old sentence that I will delete",))
+        # No blank line between the two todo lines, so they are one item: list shows its first line.
+        h.expect(f"{name}: inline todo after the marker", "todo_items", "list", "--source", "inline",
+                 has=("Buy twine",))
+        os.remove(h.path(name))
+    h.write("harness.yaml", yml)
+
+
+def odt_features(h, yml):
+    """The same for a LibreOffice thought log, plus ODF's own spacing rules."""
+    body = "".join([
+        '<text:tracked-changes><text:changed-region text:id="c1"><text:deletion><text:p>twelve</text:p>'
+        '</text:deletion></text:changed-region></text:tracked-changes>',
+        '<text:h text:outline-level="2">11/12/2026</text:h>',
+        '<text:p>Bed plan: <text:a xlink:type="simple" xlink:href="https://example.org/beds">the drawing</text:a></text:p>',
+        '<text:p><text:a xlink:href="https://example.org/seeds">https://example.org/seeds</text:a> and '
+        '<text:a xlink:href="#Top">the top</text:a></text:p>',
+        '<text:p>Buy <text:change text:change-id="c1"/><text:change-start text:change-id="c2"/>ten'
+        '<text:change-end text:change-id="c2"/> bags<office:annotation><dc:creator>x</dc:creator>'
+        '<text:p>a comment</text:p></office:annotation><text:note><text:note-citation>1</text:note-citation>'
+        '<text:note-body><text:p>a footnote</text:p></text:note-body></text:note></text:p>',
+        '<table:table><table:table-row><table:table-cell><text:p>north bed</text:p></table:table-cell>'
+        '<table:table-cell><text:p>south bed</text:p></table:table-cell></table:table-row></table:table>',
+        '<text:p>\n   first   half<text:line-break/>second<text:s text:c="3"/>half<text:tab/>tabbed</text:p>',
+        '<text:p/>',
+        '<text:h>11/13/2026</text:h>',
+    ])
+    write_odt(h.path("thinking.ODT"), body)
+    h.write("harness.yaml", yml.replace("path: thinking.txt", "path: thinking.ODT"))
+    h.expect("odt: a heading date starts a day; links, tracked changes, table, spacing", "thought_log", "show",
+             "2026-11-12", has=(
+                 "11/12/2026\nBed plan: the drawing <https://example.org/beds>\n",
+                 "\nhttps://example.org/seeds and the top\n",
+                 "\nBuy ten bags\n",
+                 "\nnorth bed\nsouth bed\n",
+                 "\nfirst half\nsecond   half\ttabbed\n\n"),
+             lacks=("twelve", "comment", "footnote", "<https://example.org/seeds>", "#Top", "11/13/2026"))
 
 
 def note_corners(h, tmp):

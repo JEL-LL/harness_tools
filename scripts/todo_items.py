@@ -1,9 +1,10 @@
 """Read the todo file and the thought log's inline todo section live, and track which items are pinned to notes.
 
 Optional add-on. Sources, each switched on only when configured in harness.yaml:
-  todo.path                        the todo file. With todo.split_marker set, everything above the
-                                   line starting with the marker is done and everything below is open;
-                                   without it the whole file is open.
+  todo.path                        the todo file (.txt, .docx or .odt; see doc_text.py). With
+                                   todo.split_marker set, everything above the line starting with the
+                                   marker is done and everything below is open; without it the whole
+                                   file is open.
   thought_log.inline_todo_marker   everything after this line in the thought log is an inline todo list.
 With neither configured, every command reports no items, and review.py leaves its todo section out.
 
@@ -33,7 +34,7 @@ keeps its links; a bare --notes or --context (no values) clears them. unpin alwa
 import argparse, datetime, hashlib, json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import config
+import config, doc_text
 
 PINS = config.PINS
 SPLIT = config.TODO_SPLIT
@@ -73,8 +74,7 @@ def items():
         print(f"todo_items: {key} is set but {path} does not exist; its items are left out", file=sys.stderr)
     out = []
     if config.todo_enabled():
-        with open(config.TODO, encoding="utf-8-sig", errors="replace") as f:
-            lines = f.readlines()
+        lines = list(doc_text.read_lines(config.TODO))  # .txt, .docx or .odt
         cut = next((i for i, l in enumerate(lines) if SPLIT and l.startswith(SPLIT)), None)
         if not SPLIT:  # no split marker configured: the whole file is open
             out += [_item(b, "open", i) for i, b in enumerate(_blocks(lines))]
@@ -86,14 +86,13 @@ def items():
             out += [_item(b, "done", i) for i, b in enumerate(_blocks(lines[:cut]))]
             out += [_item(b, "open", i) for i, b in enumerate(_blocks(lines[cut + 1:]))]
     if INLINE_TODO and config.thought_log_enabled():
-        with open(config.THOUGHT_LOG, encoding="utf-8-sig", errors="replace") as f:
-            inline, on = [], False
-            for line in f:
-                if line.startswith(INLINE_TODO):
-                    on = True
-                    continue
-                if on:
-                    inline.append(line)
+        inline, on = [], False
+        for line in doc_text.read_lines(config.THOUGHT_LOG):
+            if line.startswith(INLINE_TODO):
+                on = True
+                continue
+            if on:
+                inline.append(line)
         out += [_item(b, "inline", i) for i, b in enumerate(_blocks(inline))]
     seen = {}
     for it in out:  # identical first lines (bare URLs etc.) get -2, -3 suffixes

@@ -1,5 +1,6 @@
 """Helpers shared by tests/smoke_test.py and tests/smoke_edges.py: checks, and harness copies to run scripts on."""
-import hashlib, os, re, shutil, subprocess, sys
+import hashlib, os, re, shutil, subprocess, sys, zipfile
+from xml.sax.saxutils import escape
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(REPO, "scripts")
@@ -89,3 +90,73 @@ def lines(p):
 def ranked(p):
     """Slugs of the score rows in priority.py's ranked list (not the reason lines under them)."""
     return re.findall(r"^\s*-?\d+\.\d  (\S+)", p.stdout, re.M)
+
+
+# ---------------------------------------------------------------- documents built at test time
+# The smallest .docx and .odt that Word and LibreOffice open, written with zipfile so the repo
+# holds no binary files. BODY is the XML inside w:body or office:text.
+
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+PKG = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+
+def write_docx(path, body, links=None, no_mode=()):
+    """LINKS: relationship id -> external address, for w:hyperlink r:id. Ids in NO_MODE are written
+    without TargetMode="External", as some generators do."""
+    mode = lambda i: "" if i in no_mode else ' TargetMode="External"'
+    rels = "".join(f'<Relationship Id="{i}" Type="{R_NS}/hyperlink" Target="{escape(u)}"{mode(i)}/>'
+                   for i, u in (links or {}).items())
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml",
+                   '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                   '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                   '<Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" '
+                   'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        z.writestr("_rels/.rels", f'<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="{PKG}">'
+                   f'<Relationship Id="rId1" Type="{R_NS}/officeDocument" Target="word/document.xml"/></Relationships>')
+        z.writestr("word/document.xml", f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                   f'<w:document xmlns:w="{W_NS}" xmlns:r="{R_NS}"><w:body>{body}</w:body></w:document>')
+        z.writestr("word/_rels/document.xml.rels",
+                   f'<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="{PKG}">{rels}</Relationships>')
+
+
+def write_odt(path, body):
+    mime = "application/vnd.oasis.opendocument.text"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), mime, compress_type=zipfile.ZIP_STORED)  # first, uncompressed
+        z.writestr("META-INF/manifest.xml",
+                   '<?xml version="1.0" encoding="UTF-8"?><manifest:manifest '
+                   'xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">'
+                   f'<manifest:file-entry manifest:full-path="/" manifest:media-type="{mime}"/>'
+                   '<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>'
+                   '</manifest:manifest>')
+        z.writestr("content.xml",
+                   '<?xml version="1.0" encoding="UTF-8"?>\n<office:document-content '
+                   'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+                   'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+                   'xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+                   'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+                   'xmlns:xlink="http://www.w3.org/1999/xlink" office:version="1.2">'
+                   f'<office:body><office:text>{body}</office:text></office:body></office:document-content>')
+
+
+def docx_paras(text, heading=None):
+    """One w:p per line of TEXT; lines matching the regex HEADING are styled as headings."""
+    out = []
+    for line in text.split("\n")[:-1] if text.endswith("\n") else text.split("\n"):
+        style = '<w:pPr><w:pStyle w:val="Heading1"/></w:pPr>' if heading and re.match(heading, line) else ""
+        run = f'<w:r><w:t xml:space="preserve">{escape(line)}</w:t></w:r>' if line else ""
+        out.append(f"<w:p>{style}{run}</w:p>")
+    return "".join(out)
+
+
+def odt_paras(text, heading=None):
+    """One text:p (or text:h, for lines matching HEADING) per line of TEXT."""
+    out = []
+    for line in text.split("\n")[:-1] if text.endswith("\n") else text.split("\n"):
+        body = re.sub(r"  +", lambda m: f' <text:s text:c="{len(m.group(0)) - 1}"/>', escape(line))
+        body = re.sub(r"^ ", "<text:s/>", body).replace("\t", "<text:tab/>")
+        tag = 'text:h text:outline-level="1"' if heading and re.match(heading, line) else "text:p"
+        out.append(f"<{tag}>{body}</{tag.split()[0]}>")
+    return "".join(out)
