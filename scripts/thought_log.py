@@ -54,7 +54,7 @@ def segments():
         return []
     segs, cur, seen = [], None, {}
     BAD_STAMPS.clear()
-    with open(config.THOUGHT_LOG, encoding="utf-8", errors="replace") as f:
+    with open(config.THOUGHT_LOG, encoding="utf-8-sig", errors="replace") as f:
         for n, line in enumerate(f, 1):
             if INLINE_TODO and line.startswith(INLINE_TODO):
                 break

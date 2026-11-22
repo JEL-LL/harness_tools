@@ -21,6 +21,7 @@ def run(tmp):
     todo_pins(h)
     todo_sources(h)
     odd_stamps(h)
+    bom_first_day(h)
     note_corners(h, tmp)
     count_log_entries(h)
     settings(h, tmp)
@@ -170,6 +171,15 @@ def odd_stamps(h):
                  has=("NOTDATE line 49  '13/01/2026' is not a real date read as mdy", "REPEAT  2026-11-06"))
     check("...and warns once on stderr", "1 date stamp(s) are not real dates" in p.stderr, p.stderr)
     h.expect("a bad stamp stays ordinary text", "thought_log", "show", "2026-11-09", has=("13/01/2026",))
+    h.write("thinking.txt", log)
+
+
+def bom_first_day(h):
+    # Google Docs and Windows Notepad save UTF-8 text with a byte-order mark; the first stamp must still count.
+    log = h.read("thinking.txt")
+    h.write("thinking.txt", "\ufeff" + log)
+    h.expect("a leading byte-order mark does not hide the first day", "thought_log", "show", "2026-09-08",
+             has=("Walked the lot with Dana and Sam.",))
     h.write("thinking.txt", log)
 
 

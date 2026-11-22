@@ -86,7 +86,7 @@ def items():
             out += [_item(b, "done", i) for i, b in enumerate(_blocks(lines[:cut]))]
             out += [_item(b, "open", i) for i, b in enumerate(_blocks(lines[cut + 1:]))]
     if INLINE_TODO and config.thought_log_enabled():
-        with open(config.THOUGHT_LOG, encoding="utf-8", errors="replace") as f:
+        with open(config.THOUGHT_LOG, encoding="utf-8-sig", errors="replace") as f:
             inline, on = [], False
             for line in f:
                 if line.startswith(INLINE_TODO):
