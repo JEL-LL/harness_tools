@@ -13,14 +13,16 @@ are asserted, never exact scores.
   Run 4  edge cases (tests/smoke_edges.py): failing link checks, review.repos, HARNESS_CONFIG,
          null and invalid settings, missing todo sources, odd thought-log stamps, the thought log
          and todo file as .docx and .odt (built at test time), note.py corners
+  Run 5  query.py: every operator, OR, negation, groups, dates, errors; added-after/-before on a
+         git repo made from the copy (two commits with set committer dates)
 """
-import os, re, sys, tempfile
+import copy, datetime, json, os, re, shutil, subprocess, sys, tempfile
 
 import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python -I leaves this folder off sys.path
 sys.dont_write_bytecode = True  # no tests/__pycache__ from importing the helpers
-from smoke_lib import ALL_SCRIPTS, EXAMPLE, RESULTS, Harness, check, lines, ranked, tree_hash
+from smoke_lib import ALL_SCRIPTS, EXAMPLE, RESULTS, Harness, check, lines, ranked, skip, tree_hash
 import smoke_edges
 
 
@@ -250,6 +252,286 @@ def run_bad(h):
     h.write("harness.yaml", good)
 
 
+# ---------------------------------------------------------------- run 5: query
+
+def run_query(h, tmp):
+    print("\n== Run 5: query ==")
+    q = lambda *args, **kw: h.expect(f"query {' '.join(args)}", "query", *args, **kw)
+    rows = lambda p: [l.split()[0] for l in p.stdout.splitlines()[:-1] if l[:1].strip()]
+    # a Log with a continuation line, a date range, an undated bullet and a trailing Todos: line
+    h.edit("concordance/projects/rain-barrel.md", "- 2026-10-17: parked until after the autumn rains.\n",
+           "- 2026-10-17: parked until after the autumn rains.\n  The downpipe kit waits in the shed.\n"
+           "- 2026-10-18..10-24: rain gauge read every evening.\n- no date: a third barrel came up.\n"
+           "Todos: none yet\n\nA closing remark, not an entry.\n")
+    start = tree_hash(h.root)
+    p = q("note:rain-barrel", has=("4 entries in 1 note",), lacks=("Todos", "closing remark"))
+    check("query: continuation indented beneath its entry, undated entry last",
+          p.stdout.splitlines()[1:5] == ["rain-barrel  2026-10-17: parked until after the autumn rains.",
+                                         "             The downpipe kit waits in the shed.",
+                                         "rain-barrel  2026-10-18..10-24: rain gauge read every evening.",
+                                         "rain-barrel  no date: a third barrel came up."], p.stdout)
+    q("note:[[rain-barrel]] downpipe", has=("1 entry in 1 note", "parked until"))  # continuations are searched
+    q("note:rain-barrel after:2026-10-18", has=("1 entry", "rain gauge"))           # a range: its first date
+    q("note:rain-barrel before:2026-10-18", has=("2 entries", "parked until"), lacks=("no date",))
+    q("note:rain-barrel -after:2026-01-01", has=("1 entry", "no date"))             # undated: never after:
+    # date edges: after: is inclusive, before: exclusive
+    q("after:2026-11-09", has=("1 entry", "garden-season"))
+    p = q("before:2026-09-14")
+    check("query before: is exclusive", rows(p) == ["garden-season"], p.stdout)
+    # note operators
+    p = q("kind:projects", "after:2026-11-06")
+    check("query kind: folder name form", rows(p) == ["greenhouse", "raised-beds", "garden-season"], p.stdout)
+    q("kind:person", has=("sam ",), lacks=("garden-season",))
+    p = q("state:waiting", "--notes")
+    check("query state: with --notes", rows(p) == ["compost-bins", "roof-permit"] and "2 notes, 4 entries"
+          in p.stdout and "waiting" in p.stdout.splitlines()[0], p.stdout)
+    p = q("part_of:raised-beds", "--notes")
+    check("query part_of: the note itself and its children", rows(p) == ["lumber-order", "raised-beds"], p.stdout)
+    p = q("part_of:garden-season", "--notes")
+    check("query part_of: transitive (lumber-order sits under raised-beds)", "lumber-order" in rows(p)
+          and "roof-permit" in rows(p) and "sam" not in rows(p), p.stdout)
+    p = q("links:dana", "--notes")
+    check("query links:", rows(p) == ["garden-season", "harvest-supper", "roof-permit"], p.stdout)
+    q("waiting_on:[[sam]]", has=("2 entries in 1 note", "compost-bins"))
+    q("depends_on:lumber-order", has=("raised-beds",), lacks=("lumber-order ",))
+    q("base:0.5", has=("2 entries", "roof-permit"))
+    q("no_such_key:x", code=1, has=("0 entries",))
+    # entry operators, OR, negation, groups
+    q('"permit desk"', has=("1 entry", "submitted at the city"))
+    q("re:pallets?", "-note:sam", has=("compost-bins",), lacks=("sam ",))
+    p = q("pallets OR lumber OR tarp")
+    check("query OR chain", rows(p) == ["compost-bins", "sam", "raised-beds", "tool-shed-roof"], p.stdout)
+    p = q("state:active", "-(note:garden-season OR kind:person)", "after:2026-11-01")
+    check("query negated group", rows(p) == ["raised-beds"], p.stdout)
+    p = q("(lumber OR tarp) after:2026-11-01")
+    check("query group with OR, then AND", rows(p) == ["tool-shed-roof"], p.stdout)
+    q("permit", "--limit", "1", has=("2 entries in 2 notes (showing 1)",))
+    p = q("--json", "note:roof-permit", "desk")
+    try:
+        data = json.loads(p.stdout)
+    except ValueError:
+        data = None
+    check("query --json", data and data[0]["slug"] == "roof-permit" and data[0]["kind"] == "project"
+          and data[0]["path"] == "concordance/projects/roof-permit.md" and data[0]["date"] == "2026-10-20"
+          and "added" in data[0], p.stdout)
+    q("nothing-says-this", code=1, has=("0 entries",))
+    for bad, why in (("a OR", "OR needs a term"), ("(a", "unclosed '('"), ("a)", "unmatched ')'"),
+                     ("after:2026-1-1", "bad date"), ("re:[", "bad regex"), ('"open', "unclosed quote"),
+                     ("state:", "nothing after"), ("-AND x", "unexpected AND (AND needs a term on each side)"),
+                     ("-OR x", "unexpected OR (OR needs a term on each side)")):
+        q(bad, code=2, has=(why,), where="stderr")
+    p = q("kind:person", "--notes", "--json")
+    check("query --notes --json: a note with no state has state null",
+          json.loads(p.stdout or "[]") == [{"slug": "sam", "kind": "person", "state": None, "entries": 1}], p.stdout)
+    q("kind:person", "--notes", has=("sam  person   -         1",))
+    q("--note", "sam", code=2, has=("unknown option --note",), where="stderr")
+    q("--", "--note", code=1, has=("0 entries",))
+    # a part_of loop still answers
+    old = h.edit("concordance/projects/garden-season.md", "state: active\n",
+                 'state: active\npart_of: "[[raised-beds]]"\n')
+    q("part_of:lumber-order", "--notes", has=("1 note,",))
+    q("part_of:raised-beds", "after:2026-11-09", has=("garden-season",))
+    h.write("concordance/projects/garden-season.md", old)
+    # added-after: / added-before: need git
+    ceiling = {"GIT_CEILING_DIRECTORIES": tmp}  # never find a repo above the temp folder
+    q("added-after:2026-01-01", code=2, has=("git work tree",), where="stderr", env=ceiling)
+    check("query wrote nothing", tree_hash(h.root) == start)
+    git_added(h, q, rows, ceiling)
+
+
+def git_added(h, q, rows, ceiling):
+    if not shutil.which("git"):
+        skip("query added-after:", "git is not installed")
+        return
+    env = dict(ceiling, GIT_AUTHOR_NAME="Tester", GIT_AUTHOR_EMAIL="tester@example.invalid",
+               GIT_COMMITTER_NAME="Tester", GIT_COMMITTER_EMAIL="tester@example.invalid",
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")  # the fixture ignores the user's git config
+
+    def git(stamp, *args):
+        e = dict(os.environ, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp, **env)
+        p = subprocess.run(["git", "-C", h.root, *args], capture_output=True, text=True, env=e)
+        return check(f"query fixture: git {args[0]}", p.returncode == 0, p.stderr)
+
+    # The second commit lands 30 seconds after local midnight (the boundary of added-after:2026-11-05).
+    # Commits dated earlier than their parent are tested on a repo of their own (skewed_history), since
+    # one would turn the prefilter off for every later check here.
+    old, new = "2026-10-01T12:00:00", "2026-11-05T00:00:30"
+    if not (git(old, "init", "-q") and git(old, "add", "-A") and git(old, "commit", "-q", "-m", "story")):
+        return
+    h.run("note", "log", "compost-bins", "2026-11-05: pallets stacked by the shed.")
+    if not git(new, "commit", "-q", "-am", "pallets"):
+        return
+    h.run("note", "log", "compost-bins", "2026-11-07: first bay filled.")  # not committed
+    h.write("concordance/projects/bird-bath.md", "---\ntype: project\n---\n# Bird bath\n\n## Log\n"
+                                                 "- 2026-11-07: a neighbour offered one.\n")  # untracked
+    p = q("added-after:2026-11-01", env=env)
+    check("query added-after: the later commit, an uncommitted line and an untracked note",
+          rows(p) == ["compost-bins", "bird-bath", "compost-bins"] and "pallets stacked" in p.stdout, p.stdout)
+    p = q("added-before:2026-11-01", "note:compost-bins", env=env)
+    check("query added-before: only lines from the first commit",
+          rows(p) == ["compost-bins", "compost-bins"] and "pallets stacked" not in p.stdout, p.stdout)
+    p = q("added-after:2026-10-01", "-added-after:2026-10-02", "kind:person", env=env)
+    check("query added-after: is inclusive, by committer date", rows(p) == ["sam"] and "pallets" in p.stdout, p.stdout)
+    q("added-after:2026-11-05", "pallets", env=env, has=("1 entry",))     # just after local midnight
+    q("added-before:2026-11-05", "pallets", env=env, has=("2 entries",), lacks=("stacked",))
+    # the prefilter gives exactly what blaming every file gives
+    for args in (["added-after:2026-11-05"], ["added-after:2026-11-06"], ["added-before:2026-11-05"],
+                 ["added-before:2026-09-02"], ["added-after:2026-09-01", "-added-after:2026-10-02"],
+                 ["added-after:2026-10-02", "OR", "state:dead"], ["--json", "added-after:2026-11-01"],
+                 ["--json", "added-before:2026-10-02", "kind:person"]):
+        fast, slow = h.run("query", *args, env=env), h.run("query", *args, env=dict(env, QUERY_BLAME_ALL="1"))
+        check(f"query {' '.join(args)}: prefilter matches blaming every file",
+              (fast.returncode, fast.stdout) == (slow.returncode, slow.stdout) and fast.stdout,
+              f"{fast.stdout!r}\n      {slow.stdout!r}")
+    # dates with no local midnight the platform can represent (before 1970 on Windows, year 9999)
+    same_as_blame_all(h, "dates outside the clock's range", env, queries=(
+        ["added-after:1960-01-01"], ["added-before:1960-01-01"], ["added-after:0001-01-01", "note:sam"],
+        ["added-before:9999-12-31", "note:sam"], ["-added-after:9999-12-31", "kind:person"]))
+    q("added-after:1960-01-01", "note:sam", env=env, has=("1 entry",))
+    q("added-before:9999-12-31", "note:sam", env=env, has=("1 entry",))
+    p = q("--json", "note:compost-bins", "pallets OR filled", env=env)
+    check("query --json leaves added null without an added-* term or --added",
+          [d["added"] for d in json.loads(p.stdout or "[]")] == [None] * 3, p.stdout)
+    p = q("--json", "--added", "note:compost-bins", "pallets OR filled", env=env)
+    try:
+        data = json.loads(p.stdout)
+    except ValueError:
+        data = []
+    check("query --json --added fills added from git",
+          [d["added"] for d in data] == ["2026-10-01", "2026-11-05", datetime.date.today().isoformat()], p.stdout)
+    prefilter_corners(h, git, env, ceiling["GIT_CEILING_DIRECTORIES"])
+    # git blame failing: an added-* filter that needs it stops; --added just leaves the value null
+    if not git(old, "config", "blame.ignoreRevsFile", "no-such-file"):
+        return
+    q("added-after:2026-11-01", env=env, code=2, has=("git blame failed",), where="stderr")
+    p = q("--json", "--added", "note:sam", env=env)
+    check("query --json --added: a failed blame gives null, not an error",
+          [d["added"] for d in json.loads(p.stdout or "[]")] == [None], p.stdout)
+    skewed_history(env, ceiling["GIT_CEILING_DIRECTORIES"])
+
+
+def skewed_history(env, tmp):
+    """Commits dated earlier than their parent (a rebase, a wrong clock), on a repo of their own."""
+    h = Harness(tmp, "query-skew")
+
+    def git(stamp, *args):
+        e = dict(os.environ, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp, **env)
+        p = subprocess.run(["git", "-C", h.root, *args], capture_output=True, text=True, env=e)
+        return check(f"query skew fixture: git {args[0]}", p.returncode == 0, p.stderr)
+
+    # c1 (2020) holds the notes; c2 (2026-11-20) adds a line; c3, child of c2 but dated 2020-06-01,
+    # renames the note, so no commit after the cutoff lists the note's current name.
+    first = "2020-01-01T12:00:00"
+    if not (git(first, "init", "-q") and git(first, "add", "-A") and git(first, "commit", "-q", "-m", "c1")):
+        return
+    h.run("note", "log", "compost-bins", "2026-11-02: a line added late.")
+    if not (git("2026-11-20T12:00:00", "commit", "-q", "-am", "c2")
+            and git("2020-06-01T12:00:00", "mv", "concordance/projects/compost-bins.md",
+                    "concordance/projects/compost-heap.md")
+            and git("2020-06-01T12:00:00", "commit", "-q", "-m", "c3")):
+        return
+    # c4, dated earlier still than its parent, adds a line to another note
+    h.run("note", "log", "sam", "2026-09-01: lent a wheelbarrow.")
+    if not git("2019-06-01T12:00:00", "commit", "-q", "-am", "c4"):
+        return
+    p = h.run("query", "added-after:2026-11-01", env=env)
+    check("query: a rename dated before its parent does not hide a recent line",
+          "a line added late" in p.stdout and "1 entry" in p.stdout, p.stdout + p.stderr)
+    p = h.run("query", "added-before:2020-01-01", env=env)
+    check("query: a commit dated before its parent", "wheelbarrow" in p.stdout and "1 entry" in p.stdout,
+          p.stdout + p.stderr)
+    same_as_blame_all(h, "commits dated before their parent", env, queries=(
+        ["added-after:2026-11-01"], ["-added-after:2026-11-01", "note:compost-heap"], ["added-before:2020-01-01"],
+        ["added-after:2020-01-02"], ["--json", "added-after:2020-01-02"]))
+
+
+PREFILTER_QUERIES = (["added-after:2026-11-05"], ["added-before:2026-11-05"], ["-added-after:2026-10-02"],
+                     ["added-after:2026-10-01", "-added-after:2026-11-06"], ["--json", "added-after:2026-11-01"])
+
+
+def same_as_blame_all(h, label, env, queries=PREFILTER_QUERIES):
+    """Each query gives the same answer with the prefilter as with QUERY_BLAME_ALL=1."""
+    for args in queries:
+        fast, slow = h.run("query", *args, env=env), h.run("query", *args, env=dict(env, QUERY_BLAME_ALL="1"))
+        check(f"query {' '.join(args)}: prefilter matches blaming every file ({label})",
+              (fast.returncode, fast.stdout) == (slow.returncode, slow.stdout) and fast.stdout
+              and "Traceback" not in fast.stderr + slow.stderr, f"{fast.stdout!r}\n      {slow.stdout!r}")
+
+
+def prefilter_corners(h, git, env, tmp):
+    """Cases where git's view of the files differs from the notes' paths or from git status."""
+    stamp = "2026-11-20T12:00:00"
+    # the harness reached through a link: git reports the resolved folder, the notes do not
+    link = os.path.join(tmp, "query-link")
+    if os.name == "nt":
+        made = subprocess.run(["cmd", "/c", "mklink", "/J", link, h.root], capture_output=True).returncode == 0
+    else:
+        try:
+            os.symlink(h.root, link, target_is_directory=True)
+            made = True
+        except OSError:
+            made = False
+    if made:
+        via = copy.copy(h)
+        via.root = link
+        try:
+            same_as_blame_all(via, "through a link", env)
+            p = via.run("query", "-added-after:2026-10-02", env=env)
+            check("query through a link: old lines stay old", "offered pallets" in p.stdout, p.stdout)
+        finally:
+            os.rmdir(link) if os.name == "nt" else os.remove(link)  # the link only, not its target
+    else:
+        skip("query through a link", "could not make a junction or symlink")
+    # a note taken out of the index (git rm --cached): touched since the cutoff, no longer tracked
+    if git(stamp, "rm", "-q", "--cached", "concordance/projects/greenhouse.md"):
+        same_as_blame_all(h, "untracked after rm --cached", env)
+        p = h.run("query", "note:greenhouse", "added-before:2026-11-05", env=env)
+        check("query: a note taken out of the index is not dropped", "raised it again" in p.stdout, p.stdout)
+        git(stamp, "reset", "-q", "HEAD", "--", "concordance/projects/greenhouse.md")
+    # local edits git status cannot see: assume-unchanged and skip-worktree
+    for flag, slug in (("--assume-unchanged", "rain-barrel"), ("--skip-worktree", "beehive")):
+        if git(stamp, "update-index", flag, f"concordance/projects/{slug}.md"):
+            h.run("note", "log", slug, f"2026-11-08: edited under {flag}.")
+            same_as_blame_all(h, flag, env)
+            q = h.run("query", f"note:{slug}", f"added-after:{datetime.date.today()}", env=env)
+            check(f"query: a line edited under {flag} counts as added today", f"under {flag}" in q.stdout, q.stdout)
+            git(stamp, "update-index", flag.replace("--", "--no-", 1), f"concordance/projects/{slug}.md")
+    # every note touched (new timestamps, same content): the query must not refresh .git/index
+    later = datetime.datetime.now().timestamp() + 60
+    for d, _, files in os.walk(h.path("concordance")):
+        for f in files:
+            os.utime(os.path.join(d, f), (later, later))
+    index = h.path(".git", "index")
+    with open(index, "rb") as f:
+        before = (f.read(), os.stat(index).st_mtime_ns)
+    same_as_blame_all(h, "notes touched, content unchanged", env)
+    with open(index, "rb") as f:
+        after = (f.read(), os.stat(index).st_mtime_ns)
+    check("query leaves .git/index alone (bytes and mtime)", after == before)
+    # the fixture refreshes it itself, so the touched notes stop looking changed (and being blamed),
+    # which would hide what the checks below are after
+    git(stamp, "update-index", "-q", "--refresh")
+    # log.showRoot false in the repo's own config: the root commit's files must still count
+    if git(stamp, "config", "log.showRoot", "false"):
+        same_as_blame_all(h, "log.showRoot false", env, queries=(
+            ["added-after:2026-10-01"], ["added-before:2026-10-02"], ["--json", "added-after:2026-10-01", "kind:person"]))
+        p = h.run("query", "added-after:2026-10-01", "note:sam", env=env)
+        check("query: lines from the root commit count with log.showRoot false", "offered pallets" in p.stdout, p.stdout)
+    # a case-only rename committed in git, then undone on a case-insensitive disk
+    ignorecase = subprocess.run(["git", "-C", h.root, "config", "--bool", "core.ignorecase"],
+                                capture_output=True, text=True).stdout.strip() == "true"
+    if not ignorecase:
+        skip("query: note named in another case than in git", "core.ignorecase is not true here")
+        return
+    old, new = "concordance/projects/harvest-supper.md", "concordance/projects/harvest-Supper.md"
+    if git(stamp, "mv", old, new) and git(stamp, "commit", "-q", "-m", "case"):
+        os.rename(h.path(*new.split("/")), h.path(*old.split("/")))
+        same_as_blame_all(h, "case differs from the index", env)
+        p = h.run("query", "note:harvest-supper", "-added-after:2026-11-01", env=env)
+        check("query: a note named in another case than in git keeps its old lines old",
+              "suggested it" in p.stdout and "2 entries" in p.stdout, p.stdout)
+
+
 def main():
     for s in (sys.stdout, sys.stderr):
         try:
@@ -264,6 +546,7 @@ def main():
         run_off(Harness(tmp, "off"))
         run_bad(Harness(tmp, "bad"))
         smoke_edges.run(tmp)
+        run_query(Harness(tmp, "query"), tmp)
     check("temp folder removed", not os.path.exists(tmp), tmp)
     check("example/ was not modified", tree_hash(EXAMPLE) == start)
     failed = [n for n, ok in RESULTS if not ok]

@@ -5,7 +5,7 @@ from xml.sax.saxutils import escape
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(REPO, "scripts")
 EXAMPLE = os.path.join(REPO, "example")
-ALL_SCRIPTS = ["config", "note", "priority", "links", "review", "thought_log", "todo_items"]
+ALL_SCRIPTS = ["config", "note", "priority", "links", "review", "thought_log", "todo_items", "query"]
 RESULTS = []
 
 

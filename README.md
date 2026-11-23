@@ -31,6 +31,8 @@ optional: everything works without them.
   scripts that reformat a note by accident.
 - **Link checking.** `links.py` finds broken `[[links]]`, duplicate slugs, notes with no `type`,
   and tracked notes that can never age.
+- **Search.** `query.py` finds Log entries by text, date, the day they were written (from
+  git) and note fields, with AND, OR and negation, like a mail search.
 - **A daily digest.** `review.py` writes one page: top items, overdue nudges, just-unblocked
   work, what is waiting, what needs confirming, and the open questions for the person.
 - **Steering without rewriting.** A *knob* pushes a note down (or lifts it) by an amount that can
@@ -187,6 +189,48 @@ What happens as the world moves on (on a copy, same day): marking the permit don
 (`note.py set roof-permit state done`, `note.py set roof-permit done_on 2026-11-11`) gives the
 roof `+3.0 unblocked 2026-11-11` and a score of 11.2; marking the raised beds done ends the
 supper's knob and it rises from 1.0 to its base 4.0.
+
+## Searching the Log
+
+`query.py` searches every note's `## Log` the way a mail search box filters mail. Each result
+is one Log entry: a top-level `- ` bullet and its indented continuation lines. Its date is the
+first `YYYY-MM-DD` at the start of the bullet (`2026-10-18..10-24:` counts as 2026-10-18).
+
+- Terms AND together; `a OR b` (capitals) needs either and binds tighter; `-term` excludes;
+  parentheses group.
+- Entry terms: a word or `"a phrase"` (case-insensitive substring), `re:PATTERN`,
+  `after:DATE` (on or after), `before:DATE` (before), and `added-after:DATE` /
+  `added-before:DATE`: the day the line was committed, from `git blame` (uncommitted lines count
+  as today; needs the harness in git).
+- Note terms: `note:SLUG`, `kind:project` (or `kind:projects`), `state:S`, `part_of:SLUG` (that
+  note and everything under it), `links:SLUG`, and `FIELD:VALUE` for any other front-matter key.
+- `--notes` lists matching notes instead, `--json` gives machine-readable output, `--limit N`.
+  In `--json`, each entry's `added` day comes from git only when the query has an `added-*`
+  term or `--added` is given (otherwise null, which keeps it fast). Exit 1 when nothing
+  matches, 2 on a bad query or an unknown `--option` (put `--` before a word to search for it).
+- For `added-*` terms, `git blame` runs only on notes committed to or changed since the earliest
+  date asked for, several at once, so the cost follows how much was written recently, not how
+  many notes there are. If the history has a commit dated earlier than its parent (a rebase or a
+  wrong clock), or a date the system clock cannot represent is asked for, every note that might
+  match is blamed instead: slower, same answer.
+
+```
+$ HARNESS_ROOT=example python scripts/query.py part_of:garden-season after:2026-11-01 -state:proposed
+tool-shed-roof  2026-11-03: tarp is holding for now, but not for long.
+greenhouse      2026-11-06: [[sam]] raised it again; not this year.
+raised-beds     2026-11-06: first two beds framed with [[sam]].
+garden-season   2026-11-09: half the list is moving; the shed is the sticking point.
+4 entries in 4 notes
+
+$ HARNESS_ROOT=example python scripts/query.py '"permit desk" OR pallets' --notes
+compost-bins  project  waiting   1
+roof-permit   project  waiting   1
+sam           person   -         1
+3 notes, 3 entries
+```
+
+`added-after:` answers "what was written down since Monday", whatever dates the entries
+themselves carry: `python scripts/query.py added-after:2026-11-16`.
 
 ## Optional add-ons
 
@@ -395,6 +439,7 @@ mistake. Never copy credentials or other secrets into notes.
 - `scripts/priority.py`: ranks notes with reasons; `explain SLUG`.
 - `scripts/links.py`: `check`, `backlinks SLUG`, `orphans`, and `index` (writes `concordance/INDEX.md`).
 - `scripts/review.py`: writes the daily review digest.
+- `scripts/query.py`: searches Log entries by text, dates and note fields (read-only).
 - `scripts/doc_text.py`: reads the thought log and todo file as lines, from `.txt`, `.docx` or `.odt`
   (documents cached in `.cache/`).
 - `scripts/thought_log.py`: thought log add-on: `stats`, `show`, `grep`, `next`, `mark`, `dates`.
